@@ -344,7 +344,7 @@ def main():
     app.launch(
         server_name=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
         server_port=int(os.environ.get("GRADIO_SERVER_PORT", 7860)),
-        share=True,
+        share=False,
         show_error=True,
     )
 
