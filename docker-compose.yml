@@ -1,0 +1,38 @@
+services:
+  whisper-asr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: whisper-for-subs
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    volumes:
+      # Persist Whisper models
+      - whisper-models:/root/.cache/huggingface
+      # Persist Silero VAD models
+      - torch-hub:/root/.cache/torch/hub
+      # Upload and output directories
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+    environment:
+      - CUDA_VISIBLE_DEVICES=0,1,2,3
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - GRADIO_SERVER_PORT=7860
+      # Model settings (can be overridden)
+      - WHISPER_MODEL=large-v3
+      - WHISPER_DEVICE=cuda
+      - WHISPER_COMPUTE_TYPE=float16
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Enable shared memory for PyTorch
+    shm_size: '8gb'
+
+volumes:
+  whisper-models:
+  torch-hub:

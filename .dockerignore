@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.env
+.venv
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+docker-compose.yml
+.docker/
+.dockerignore
+
+# Documentation
+README.md
+docs/
+
+# Temporary files
+uploads/
+outputs/
+*.srt
+*.wav
+*.mp3
+*.mp4
+*.log

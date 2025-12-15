@@ -1,0 +1,22 @@
+# Core ASR
+faster-whisper>=1.0.0
+openai-whisper>=20231117
+
+# VAD
+silero-vad>=5.1
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Web Interface
+gradio>=4.0.0
+
+# YouTube Download
+yt-dlp>=2024.1.1
+
+# Audio Processing
+pydub>=0.25.1
+soundfile>=0.12.1
+numpy>=1.24.0
+
+# Utilities
+ffmpeg-python>=0.2.0
