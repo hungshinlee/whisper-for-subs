@@ -58,18 +58,26 @@ docker compose version
 ### 2. 安裝 NVIDIA Container Toolkit
 
 ```bash
+# 添加 NVIDIA GPG 金鑰
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+
 # 添加 NVIDIA 套件庫
-distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
-curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
-curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
-    sudo tee /etc/apt/sources.list.d/nvidia-docker.list
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+    sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
 # 安裝
 sudo apt-get update
 sudo apt-get install -y nvidia-container-toolkit
 
+# 設定 Docker 使用 NVIDIA runtime
+sudo nvidia-ctk runtime configure --runtime=docker
+
 # 重啟 Docker
 sudo systemctl restart docker
+
+# 驗證安裝
+sudo docker run --rm --gpus all nvidia/cuda:12.1-base-ubuntu22.04 nvidia-smi
 ```
 
 ### 3. 建置與啟動服務
