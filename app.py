@@ -271,7 +271,6 @@ def create_interface() -> gr.Blocks:
                     label="SRT 字幕內容",
                     lines=20,
                     max_lines=30,
-                    show_copy_button=True,
                 )
                 
                 srt_file = gr.File(
