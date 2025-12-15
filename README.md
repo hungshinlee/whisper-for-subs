@@ -101,6 +101,50 @@ docker compose logs -f
 
 Open your browser and navigate to: `http://your-server-ip`
 
+> **Note**: The service uses HTTP (port 80). If your browser automatically redirects to HTTPS, see [Browser Settings](#browser-settings-for-http-access) below.
+
+## Browser Settings for HTTP Access
+
+Modern browsers may automatically redirect HTTP to HTTPS. Follow these steps to access the service via HTTP:
+
+### Chrome
+
+**Step 1: Disable "Always use secure connections"**
+
+1. Enter `chrome://settings/security` in the address bar
+2. Find "Always use secure connections"
+3. **Turn it off**
+
+**Step 2: Clear HSTS record for the IP**
+
+1. Enter `chrome://net-internals/#hsts` in the address bar
+2. Scroll down to **Delete domain security policies**
+3. Enter your server IP (e.g., `140.109.20.213`)
+4. Click **Delete**
+
+**Step 3: Clear browser cache**
+
+1. Press `Cmd + Shift + Delete` (Mac) or `Ctrl + Shift + Delete` (Windows)
+2. Select "All time" for time range
+3. Check "Cached images and files"
+4. Click "Clear data"
+
+**Step 4: Restart Chrome**
+
+1. Completely quit Chrome (`Cmd + Q` on Mac)
+2. Reopen Chrome
+3. Navigate to `http://your-server-ip`
+
+### Firefox
+
+1. Enter `about:config` in the address bar
+2. Search for `dom.security.https_only_mode`
+3. Set it to `false`
+
+### Safari
+
+Safari generally doesn't force HTTPS for IP addresses, so it should work directly.
+
 ## Configuration
 
 ### Environment Variables
@@ -195,7 +239,9 @@ whisper-for-subs/
 ├── requirements.txt       # Python dependencies
 ├── Dockerfile             # Docker image configuration
 ├── docker-compose.yml     # Docker Compose configuration
-└── README.md              # Documentation
+├── LICENSE                # MIT License
+├── README.md              # Documentation (English)
+└── README.zh-TW.md        # Documentation (Traditional Chinese)
 ```
 
 ## Troubleshooting
@@ -220,6 +266,17 @@ docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
 - Check network connection
 - Update yt-dlp: `pip install -U yt-dlp`
 - Check if the video has regional restrictions
+
+### Port 80 Already in Use
+
+```bash
+# Check which service is using port 80
+sudo lsof -i :80
+
+# Stop the service (e.g., if it's Caddy)
+sudo systemctl stop caddy
+sudo systemctl disable caddy
+```
 
 ## License
 

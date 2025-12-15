@@ -101,6 +101,50 @@ docker compose logs -f
 
 開啟瀏覽器訪問：`http://your-server-ip`
 
+> **注意**：本服務使用 HTTP（port 80）。如果瀏覽器自動跳轉到 HTTPS，請參考下方的[瀏覽器設定](#瀏覽器設定http-存取)。
+
+## 瀏覽器設定（HTTP 存取）
+
+現代瀏覽器可能會自動將 HTTP 跳轉為 HTTPS。請依照以下步驟設定以透過 HTTP 存取服務：
+
+### Chrome
+
+**步驟 1：關閉「一律使用安全連線」**
+
+1. 在網址列輸入 `chrome://settings/security`
+2. 找到「一律使用安全連線」
+3. **關閉**它
+
+**步驟 2：清除該 IP 的 HSTS 記錄**
+
+1. 在網址列輸入 `chrome://net-internals/#hsts`
+2. 往下找到 **Delete domain security policies**
+3. 輸入伺服器 IP（例如 `140.109.20.213`）
+4. 點擊 **Delete**
+
+**步驟 3：清除瀏覽器快取**
+
+1. 按 `Cmd + Shift + Delete`（Mac）或 `Ctrl + Shift + Delete`（Windows）
+2. 時間範圍選「不限時間」
+3. 勾選「快取圖片和檔案」
+4. 點擊「清除資料」
+
+**步驟 4：完全關閉 Chrome 再重開**
+
+1. 完全關閉 Chrome（Mac 按 `Cmd + Q`）
+2. 重新打開 Chrome
+3. 在網址列輸入 `http://your-server-ip`
+
+### Firefox
+
+1. 在網址列輸入 `about:config`
+2. 搜尋 `dom.security.https_only_mode`
+3. 設定為 `false`
+
+### Safari
+
+Safari 通常不會對 IP 位址強制使用 HTTPS，應該可以直接存取。
+
 ## 配置選項
 
 ### 環境變數
@@ -110,8 +154,8 @@ docker compose logs -f
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
 | `WHISPER_MODEL` | `large-v3` | Whisper 模型大小 |
-| `WHISPER_DEVICE` | `cuda` | 運算設備 (`cuda` 或 `cpu`) |
-| `WHISPER_COMPUTE_TYPE` | `float16` | 計算精度 (`float16`, `int8`, `float32`) |
+| `WHISPER_DEVICE` | `cuda` | 運算設備（`cuda` 或 `cpu`）|
+| `WHISPER_COMPUTE_TYPE` | `float16` | 計算精度（`float16`、`int8`、`float32`）|
 | `CUDA_VISIBLE_DEVICES` | `0,1,2,3` | 可用的 GPU 編號 |
 | `PRELOAD_MODEL` | `false` | 啟動時預載模型 |
 
@@ -132,7 +176,7 @@ docker compose logs -f
 ### 上傳音檔或影片
 
 1. 點擊「上傳音檔或影片」區域
-2. 選擇音檔 (`.wav`, `.mp3`, `.m4a`, `.flac`) 或影片 (`.mp4`, `.mkv`, `.webm`)
+2. 選擇音檔（`.wav`、`.mp3`、`.m4a`、`.flac`）或影片（`.mp4`、`.mkv`、`.webm`）
 3. 設定語言和轉錄模式
 4. 點擊「開始轉錄」
 
@@ -151,8 +195,8 @@ docker compose logs -f
 - **模型大小**：較大的模型品質較好但速度較慢
 - **語言**：選擇「自動偵測」或指定語言
 - **功能**：
-  - 轉錄 (Transcribe)：輸出原始語言字幕
-  - 翻譯 (Translate)：翻譯成英文字幕
+  - 轉錄（Transcribe）：輸出原始語言字幕
+  - 翻譯（Translate）：翻譯成英文字幕
 - **VAD 語音偵測**：啟用可提高分段精確度
 - **合併短字幕**：將過短的字幕合併成適當長度
 
@@ -195,7 +239,9 @@ whisper-for-subs/
 ├── requirements.txt       # Python 依賴
 ├── Dockerfile             # Docker 映像檔
 ├── docker-compose.yml     # Docker Compose 配置
-└── README.md              # 說明文件
+├── LICENSE                # MIT 授權
+├── README.md              # 說明文件（英文）
+└── README.zh-TW.md        # 說明文件（繁體中文）
 ```
 
 ## 故障排除
@@ -220,6 +266,17 @@ docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
 - 確認網路連線
 - 更新 yt-dlp：`pip install -U yt-dlp`
 - 檢查影片是否有地區限制
+
+### Port 80 已被佔用
+
+```bash
+# 檢查哪個服務佔用 port 80
+sudo lsof -i :80
+
+# 停止該服務（例如 Caddy）
+sudo systemctl stop caddy
+sudo systemctl disable caddy
+```
 
 ## 授權
 

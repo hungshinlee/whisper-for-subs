@@ -1,6 +1,5 @@
 # Core ASR
 faster-whisper>=1.0.0
-openai-whisper>=20231117
 
 # VAD
 silero-vad>=5.1
