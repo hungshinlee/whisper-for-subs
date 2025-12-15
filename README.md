@@ -22,7 +22,40 @@ An automatic speech recognition (ASR) service powered by OpenAI Whisper, convert
 
 ## Quick Start
 
-### 1. Install NVIDIA Container Toolkit
+### 1. Install Docker
+
+```bash
+# Update package index
+sudo apt-get update
+
+# Install prerequisites
+sudo apt-get install -y ca-certificates curl
+
+# Add Docker's official GPG key
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add Docker repository
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Add current user to docker group (optional, avoids using sudo)
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Verify installation
+docker --version
+docker compose version
+```
+
+### 2. Install NVIDIA Container Toolkit
 
 ```bash
 # Add NVIDIA repository
@@ -39,7 +72,7 @@ sudo apt-get install -y nvidia-container-toolkit
 sudo systemctl restart docker
 ```
 
-### 2. Build and Start Service
+### 3. Build and Start Service
 
 ```bash
 # Clone the repository
@@ -56,7 +89,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-### 3. Access the Service
+### 4. Access the Service
 
 Open your browser and navigate to: `http://your-server-ip:7860`
 

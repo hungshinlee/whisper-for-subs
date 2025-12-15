@@ -22,7 +22,40 @@
 
 ## 快速開始
 
-### 1. 安裝 NVIDIA Container Toolkit
+### 1. 安裝 Docker
+
+```bash
+# 更新套件索引
+sudo apt-get update
+
+# 安裝必要套件
+sudo apt-get install -y ca-certificates curl
+
+# 添加 Docker 官方 GPG 金鑰
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# 添加 Docker 套件庫
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# 安裝 Docker
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# 將目前使用者加入 docker 群組（選用，可免去 sudo）
+sudo usermod -aG docker $USER
+newgrp docker
+
+# 驗證安裝
+docker --version
+docker compose version
+```
+
+### 2. 安裝 NVIDIA Container Toolkit
 
 ```bash
 # 添加 NVIDIA 套件庫
@@ -39,7 +72,7 @@ sudo apt-get install -y nvidia-container-toolkit
 sudo systemctl restart docker
 ```
 
-### 2. 建置與啟動服務
+### 3. 建置與啟動服務
 
 ```bash
 # 複製專案
@@ -56,7 +89,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-### 3. 存取服務
+### 4. 存取服務
 
 開啟瀏覽器訪問：`http://your-server-ip:7860`
 
