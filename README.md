@@ -99,7 +99,7 @@ docker compose logs -f
 
 ### 4. Access the Service
 
-Open your browser and navigate to: `http://your-server-ip:7860`
+Open your browser and navigate to: `http://your-server-ip`
 
 ## Configuration
 
@@ -163,7 +163,7 @@ Gradio provides an auto-generated API that can be called via Python:
 ```python
 from gradio_client import Client
 
-client = Client("http://your-server-ip:7860")
+client = Client("http://your-server-ip")
 
 # Transcribe uploaded file
 result = client.predict(
@@ -207,7 +207,7 @@ whisper-for-subs/
 nvidia-smi
 
 # Verify Container Toolkit
-docker run --rm --gpus all nvidia/cuda:12.1-base nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
 ```
 
 ### Out of Memory

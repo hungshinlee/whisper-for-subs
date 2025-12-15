@@ -99,7 +99,7 @@ docker compose logs -f
 
 ### 4. 存取服務
 
-開啟瀏覽器訪問：`http://your-server-ip:7860`
+開啟瀏覽器訪問：`http://your-server-ip`
 
 ## 配置選項
 
@@ -163,7 +163,7 @@ Gradio 提供自動生成的 API，可透過 Python 呼叫：
 ```python
 from gradio_client import Client
 
-client = Client("http://your-server-ip:7860")
+client = Client("http://your-server-ip")
 
 # 上傳檔案轉錄
 result = client.predict(
@@ -207,7 +207,7 @@ whisper-for-subs/
 nvidia-smi
 
 # 確認 Container Toolkit
-docker run --rm --gpus all nvidia/cuda:12.1-base nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
 ```
 
 ### 記憶體不足
