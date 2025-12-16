@@ -204,16 +204,16 @@ def create_interface() -> gr.Blocks:
     """Create and return Gradio interface."""
     
     with gr.Blocks(
-        title="Whisper ASR 字幕生成服務",
+        title="Biomedical ASR with Whisper",
         theme=gr.themes.Soft(),
         css=CUSTOM_CSS,
     ) as app:
         
         gr.Markdown(
             """
-            # 🎙️ Whisper ASR 字幕生成服務
+            # 🎙️ Biomedical ASR with Whisper
             
-            上傳音檔、影片，或輸入 YouTube 網址，自動生成 SRT 字幕檔。
+            上傳音檔、影片，麥克風錄音，或輸入 YouTube 網址，自動生成 SRT 字幕檔。
             """
         )
         
