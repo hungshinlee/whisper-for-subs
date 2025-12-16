@@ -5,7 +5,7 @@ Gradio-based web interface for Whisper ASR service.
 import os
 import tempfile
 import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Generator
 
 import gradio as gr
 
@@ -76,12 +76,11 @@ def process_audio(
     use_vad: bool,
     merge_subtitles: bool,
     max_chars: int,
-    progress=gr.Progress(),
-) -> Tuple[str, str, Optional[str]]:
+) -> Generator[Tuple[str, str, Optional[str]], None, None]:
     """
     Process audio from file or YouTube URL.
     
-    Returns:
+    Yields:
         Tuple of (status message, SRT content, SRT file path)
     """
     audio_path = None
@@ -92,25 +91,24 @@ def process_audio(
         # Determine input source
         if youtube_url and youtube_url.strip():
             if not is_youtube_url(youtube_url):
-                return "❌ 無效的 YouTube 網址", "", None
+                yield "❌ 無效的 YouTube 網址", "", None
+                return
             
-            progress(0.05, desc="取得影片資訊...")
+            yield "⏳ 取得影片資訊...", "", None
             info = get_video_info(youtube_url)
             if info:
                 video_title = info.get("title", "youtube_audio")
-                progress(0.1, desc=f"下載中: {video_title[:50]}...")
+                yield f"⏳ 下載中: {video_title[:50]}...", "", None
             
             # Download audio
-            def download_progress(percent, msg):
-                progress(0.1 + percent * 0.2 / 100, desc=msg)
-            
             audio_path, title = download_audio_with_progress(
                 youtube_url,
-                progress_callback=download_progress,
+                progress_callback=None,
             )
             
             if audio_path is None:
-                return "❌ 下載失敗，請確認網址是否正確", "", None
+                yield "❌ 下載失敗，請確認網址是否正確", "", None
+                return
             
             if title:
                 video_title = title
@@ -120,33 +118,34 @@ def process_audio(
             audio_path = audio_file
             video_title = os.path.splitext(os.path.basename(audio_file))[0]
         else:
-            return "❌ 請上傳音檔或輸入 YouTube 網址", "", None
+            yield "❌ 請上傳音檔或輸入 YouTube 網址", "", None
+            return
         
         # Initialize transcriber
-        progress(0.3, desc="載入模型中...")
+        yield "⏳ 載入模型中...", "", None
         trans = get_transcriber(model_size, use_vad)
         
         # Transcribe
-        def transcribe_progress(pct, msg):
-            progress(0.3 + pct * 0.6 / 100, desc=msg)
+        yield "⏳ 轉錄中，請稍候...", "", None
         
         segments = trans.transcribe(
             audio_path,
             language=language if language != "auto" else None,
             task=task,
-            progress_callback=transcribe_progress,
+            progress_callback=None,
         )
         
         if not segments:
-            return "⚠️ 未偵測到語音內容", "", None
+            yield "⚠️ 未偵測到語音內容", "", None
+            return
         
         # Merge segments if requested
         if merge_subtitles:
-            progress(0.92, desc="合併字幕段落...")
+            yield "⏳ 合併字幕段落...", "", None
             segments = merge_segments(segments, max_chars=max_chars)
         
         # Generate SRT
-        progress(0.95, desc="生成 SRT 檔案...")
+        yield "⏳ 生成 SRT 檔案...", "", None
         srt_content = segments_to_srt(segments)
         
         # Save SRT file
@@ -160,15 +159,13 @@ def process_audio(
         with open(srt_path, "w", encoding="utf-8") as f:
             f.write(srt_content)
         
-        progress(1.0, desc="完成！")
-        
         status = f"✅ 轉錄完成！共 {len(segments)} 個字幕段落"
-        return status, srt_content, srt_path
+        yield status, srt_content, srt_path
         
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return f"❌ 錯誤: {str(e)}", "", None
+        yield f"❌ 錯誤: {str(e)}", "", None
     
     finally:
         # Cleanup temp files
@@ -182,8 +179,7 @@ def process_audio(
 
 def get_system_info() -> str:
     """Get system and GPU information."""
-    # info_lines = ["### 系統資訊\n"]
-    info_lines = [f"**來源:** 中央研究院資訊科學研究所 [王新民](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html) 研究員\n"]
+    info_lines = ["### 系統資訊\n"]
     
     gpu_info = get_gpu_info()
     if gpu_info:
@@ -204,16 +200,16 @@ def create_interface() -> gr.Blocks:
     """Create and return Gradio interface."""
     
     with gr.Blocks(
-        title="Biomedical ASR with Whisper",
+        title="Whisper ASR 字幕生成服務",
         theme=gr.themes.Soft(),
         css=CUSTOM_CSS,
     ) as app:
         
         gr.Markdown(
             """
-            # 🎙️ Biomedical ASR with Whisper
+            # 🎙️ Whisper ASR 字幕生成服務
             
-            上傳音檔、影片，麥克風錄音，或輸入 YouTube 網址，自動生成 SRT 字幕檔。
+            上傳音檔、影片，或輸入 YouTube 網址，自動生成 SRT 字幕檔。
             """
         )
         
