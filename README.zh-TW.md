@@ -264,6 +264,68 @@ whisper-for-subs/
 └── README.zh-TW.md        # 說明文件（繁體中文）
 ```
 
+## 維護
+
+### 自動清理
+
+服務會自動清理超過 24 小時的暫存檔案：
+- YouTube 下載的音檔（`/tmp/whisper-downloads`）
+- 產生的 SRT 檔案（`/app/outputs`）
+
+### 手動清理
+
+手動清理磁碟空間：
+
+```bash
+# 清理暫存檔
+docker exec whisper-for-subs rm -rf /tmp/whisper-downloads/*
+
+# 清理輸出檔案
+docker exec whisper-for-subs rm -rf /app/outputs/*
+
+# 清理 Gradio 快取
+docker exec whisper-for-subs rm -rf /tmp/gradio/*
+
+# 檢查磁碟使用量
+docker exec whisper-for-subs df -h
+```
+
+### 排程清理（選用）
+
+新增 cron 工作定期清理：
+
+```bash
+# 編輯 crontab
+crontab -e
+
+# 每天凌晨 3 點清理
+0 3 * * * docker exec whisper-for-subs find /tmp/whisper-downloads -mtime +1 -delete 2>/dev/null
+0 3 * * * docker exec whisper-for-subs find /app/outputs -name "*.srt" -mtime +1 -delete 2>/dev/null
+```
+
+## 多人同時使用
+
+### 目前限制
+
+- 服務使用**單一 Whisper 模型實例**供所有使用者共用
+- 多個請求會排隊並**依序處理**
+- 4 張 RTX 2080 Ti GPU，`large-v3` 模型使用其中一張的 ~10GB VRAM
+- 佇列最多容納 10 個等待請求
+
+### 效能建議
+
+- 多人使用時，可改用 `large-v3-turbo` 或 `medium` 模型加快處理
+- 長音檔（超過 30 分鐘）可能需要數分鐘處理
+- 系統忙碌時，使用者會看到佇列位置
+
+### 擴展方案
+
+若需更高並行處理能力，可考慮：
+
+1. **多容器**：在不同 GPU 上執行獨立容器
+2. **較小模型**：使用 `medium` 或 `small` 提高處理量
+3. **負載平衡**：在 nginx 後部署多個實例
+
 ## 故障排除
 
 ### GPU 無法使用

@@ -170,8 +170,9 @@ def download_audio_with_progress(
     Returns:
         Tuple of (audio_file_path, video_title)
     """
+    # Use /tmp/whisper-downloads for temp files (easier to clean)
     if output_dir is None:
-        output_dir = tempfile.mkdtemp()
+        output_dir = "/tmp/whisper-downloads"
     
     os.makedirs(output_dir, exist_ok=True)
     

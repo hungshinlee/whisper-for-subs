@@ -264,6 +264,68 @@ whisper-for-subs/
 └── README.zh-TW.md        # Documentation (Traditional Chinese)
 ```
 
+## Maintenance
+
+### Automatic Cleanup
+
+The service automatically cleans up temporary files older than 24 hours:
+- YouTube downloaded audio files (`/tmp/whisper-downloads`)
+- Generated SRT files (`/app/outputs`)
+
+### Manual Cleanup
+
+To manually clean up disk space:
+
+```bash
+# Clean temporary files
+docker exec whisper-for-subs rm -rf /tmp/whisper-downloads/*
+
+# Clean output files
+docker exec whisper-for-subs rm -rf /app/outputs/*
+
+# Clean Gradio cache
+docker exec whisper-for-subs rm -rf /tmp/gradio/*
+
+# Check disk usage
+docker exec whisper-for-subs df -h
+```
+
+### Scheduled Cleanup (Optional)
+
+Add a cron job for regular cleanup:
+
+```bash
+# Edit crontab
+crontab -e
+
+# Add daily cleanup at 3 AM
+0 3 * * * docker exec whisper-for-subs find /tmp/whisper-downloads -mtime +1 -delete 2>/dev/null
+0 3 * * * docker exec whisper-for-subs find /app/outputs -name "*.srt" -mtime +1 -delete 2>/dev/null
+```
+
+## Concurrent Usage
+
+### Current Limitations
+
+- The service uses a **single Whisper model instance** shared across all users
+- Multiple requests are queued and processed **sequentially**
+- With 4x RTX 2080 Ti GPUs, the `large-v3` model uses ~10GB VRAM on one GPU
+- Queue size is limited to 10 pending requests
+
+### Performance Tips
+
+- For faster processing with multiple users, use `large-v3-turbo` or `medium` model
+- Long audio files (>30 minutes) may take several minutes to process
+- Users will see a queue position if the system is busy
+
+### Scaling Options
+
+For higher concurrency, consider:
+
+1. **Multiple containers**: Run separate containers on different GPUs
+2. **Smaller models**: Use `medium` or `small` for faster throughput
+3. **Load balancer**: Deploy multiple instances behind nginx
+
 ## Troubleshooting
 
 ### GPU Not Available

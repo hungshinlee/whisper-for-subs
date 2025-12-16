@@ -3,8 +3,11 @@ Gradio-based web interface for Whisper ASR service.
 """
 
 import os
+import glob
 import tempfile
 import time
+import shutil
+from datetime import datetime, timedelta
 from typing import Optional, Tuple, Generator
 
 import gradio as gr
@@ -51,6 +54,36 @@ textarea, input, button, select {
 
 # Global transcriber instance
 transcriber: Optional[WhisperTranscriber] = None
+
+
+def cleanup_old_files(max_age_hours: int = 24):
+    """Clean up old temporary files and outputs."""
+    now = datetime.now()
+    
+    # Clean /tmp/whisper-downloads
+    tmp_dir = "/tmp/whisper-downloads"
+    if os.path.exists(tmp_dir):
+        for f in glob.glob(os.path.join(tmp_dir, "*")):
+            try:
+                mtime = datetime.fromtimestamp(os.path.getmtime(f))
+                if now - mtime > timedelta(hours=max_age_hours):
+                    if os.path.isfile(f):
+                        os.unlink(f)
+                    elif os.path.isdir(f):
+                        shutil.rmtree(f)
+            except Exception:
+                pass
+    
+    # Clean /app/outputs (keep files for 24 hours)
+    output_dir = "/app/outputs"
+    if os.path.exists(output_dir):
+        for f in glob.glob(os.path.join(output_dir, "*.srt")):
+            try:
+                mtime = datetime.fromtimestamp(os.path.getmtime(f))
+                if now - mtime > timedelta(hours=max_age_hours):
+                    os.unlink(f)
+            except Exception:
+                pass
 
 
 def get_transcriber(
@@ -100,6 +133,9 @@ def process_audio(
     Yields:
         Tuple of (status message, SRT content, SRT file path)
     """
+    # Clean up old files periodically
+    cleanup_old_files(max_age_hours=24)
+    
     audio_path = None
     temp_files = []
     video_title = "output"
@@ -182,7 +218,9 @@ def process_audio(
         
         # Clean filename
         safe_title = "".join(c for c in video_title if c.isalnum() or c in " -_").strip()[:50]
-        srt_filename = f"{safe_title}.srt"
+        # Add timestamp to avoid conflicts
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        srt_filename = f"{safe_title}_{timestamp}.srt"
         srt_path = os.path.join(output_dir, srt_filename)
         
         with open(srt_path, "w", encoding="utf-8") as f:
@@ -379,6 +417,9 @@ def create_interface() -> gr.Blocks:
 
 def main():
     """Main entry point."""
+    # Clean up old files on startup
+    cleanup_old_files(max_age_hours=24)
+    
     # Pre-load model if specified
     default_model = os.environ.get("WHISPER_MODEL", "large-v3")
     preload = os.environ.get("PRELOAD_MODEL", "false").lower() == "true"
@@ -387,8 +428,12 @@ def main():
         print(f"Pre-loading model: {default_model}")
         get_transcriber(default_model)
     
-    # Create and launch app
+    # Create and launch app with queue for concurrent requests
     app = create_interface()
+    
+    # Enable queue for handling multiple users
+    # Note: Transcription is sequential due to GPU memory constraints
+    app.queue(max_size=10)
     
     app.launch(
         server_name=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
