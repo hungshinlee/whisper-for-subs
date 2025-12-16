@@ -42,6 +42,10 @@ CUSTOM_CSS = """
 textarea, input, button, select {
     font-family: 'Roboto', sans-serif !important;
 }
+
+.progress-bar-container {
+    margin: 10px 0;
+}
 """
 
 
@@ -65,6 +69,19 @@ def get_transcriber(
         )
     
     return transcriber
+
+
+def format_progress_html(percent: int, message: str) -> str:
+    """Generate HTML for progress bar."""
+    return f"""
+<div class="progress-bar-container">
+    <div style="margin-bottom: 5px; font-weight: 500;">{message}</div>
+    <div style="background-color: #e0e0e0; border-radius: 10px; height: 20px; overflow: hidden;">
+        <div style="background: linear-gradient(90deg, #2196F3, #21CBF3); height: 100%; width: {percent}%; transition: width 0.3s ease; border-radius: 10px;"></div>
+    </div>
+    <div style="text-align: right; font-size: 12px; color: #666; margin-top: 3px;">{percent}%</div>
+</div>
+"""
 
 
 def process_audio(
@@ -94,17 +111,19 @@ def process_audio(
                 yield "❌ 無效的 YouTube 網址", "", None
                 return
             
-            yield "⏳ 取得影片資訊...", "", None
+            yield format_progress_html(5, "取得影片資訊..."), "", None
             info = get_video_info(youtube_url)
             if info:
                 video_title = info.get("title", "youtube_audio")
-                yield f"⏳ 下載中: {video_title[:50]}...", "", None
+                yield format_progress_html(10, f"下載中: {video_title[:40]}..."), "", None
             
             # Download audio
             audio_path, title = download_audio_with_progress(
                 youtube_url,
                 progress_callback=None,
             )
+            
+            yield format_progress_html(30, "下載完成"), "", None
             
             if audio_path is None:
                 yield "❌ 下載失敗，請確認網址是否正確", "", None
@@ -117,23 +136,33 @@ def process_audio(
         elif audio_file:
             audio_path = audio_file
             video_title = os.path.splitext(os.path.basename(audio_file))[0]
+            yield format_progress_html(10, "音檔已載入"), "", None
         else:
             yield "❌ 請上傳音檔或輸入 YouTube 網址", "", None
             return
         
         # Initialize transcriber
-        yield "⏳ 載入模型中...", "", None
+        yield format_progress_html(35, "載入 Whisper 模型中..."), "", None
         trans = get_transcriber(model_size, use_vad)
         
-        # Transcribe
-        yield "⏳ 轉錄中，請稍候...", "", None
+        yield format_progress_html(40, "模型載入完成，開始轉錄..."), "", None
+        
+        # Transcribe with progress updates
+        last_progress = [40]  # Use list to allow modification in nested function
+        
+        def transcribe_progress(pct, msg):
+            # Map transcriber progress (0-100) to our range (40-85)
+            mapped = 40 + int(pct * 0.45)
+            last_progress[0] = mapped
         
         segments = trans.transcribe(
             audio_path,
             language=language if language != "auto" else None,
             task=task,
-            progress_callback=None,
+            progress_callback=transcribe_progress,
         )
+        
+        yield format_progress_html(85, "轉錄完成"), "", None
         
         if not segments:
             yield "⚠️ 未偵測到語音內容", "", None
@@ -141,11 +170,11 @@ def process_audio(
         
         # Merge segments if requested
         if merge_subtitles:
-            yield "⏳ 合併字幕段落...", "", None
+            yield format_progress_html(90, "合併字幕段落..."), "", None
             segments = merge_segments(segments, max_chars=max_chars)
         
         # Generate SRT
-        yield "⏳ 生成 SRT 檔案...", "", None
+        yield format_progress_html(95, "生成 SRT 檔案..."), "", None
         srt_content = segments_to_srt(segments)
         
         # Save SRT file
@@ -285,7 +314,7 @@ def create_interface() -> gr.Blocks:
             with gr.Column(scale=1):
                 gr.Markdown("### 📤 輸出")
                 
-                status_text = gr.Markdown("等待輸入...")
+                status_text = gr.HTML("等待輸入...")
                 
                 srt_output = gr.Textbox(
                     label="SRT 字幕內容",
