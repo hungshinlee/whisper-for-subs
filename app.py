@@ -243,7 +243,7 @@ def process_audio(
         processing_time = time.time() - start_time
         
         # Format status message with duration and processing time
-        status_parts = [f"✅ Transcription complete! {len(segments)} subtitle segments generated."]
+        status_parts = [f"✅ Transcription complete! {len(segments)} subtitle segments generated.\n"]
         
         if audio_duration > 0:
             status_parts.append(f"Audio duration: {audio_duration:.1f}s")
@@ -252,7 +252,7 @@ def process_audio(
         
         if audio_duration > 0 and processing_time > 0:
             speed_ratio = audio_duration / processing_time
-            status_parts.append(f"Speed: {speed_ratio:.2f}x realtime")
+            status_parts.append(f"Speed: {speed_ratio:.2f}x realtime |")
         
         status = " | ".join(status_parts)
         yield status, srt_content, srt_path
@@ -304,7 +304,7 @@ def create_interface() -> gr.Blocks:
             """
             # 🎙️ Medical and Pharmaceutical ASR with Whisper
             
-            Note: large-v3-turbo is for transcription only.
+            Note: large-v3-turbo is for "**transcribe**" only.
             """
         )
         
@@ -372,7 +372,7 @@ def create_interface() -> gr.Blocks:
                 )
                 
                 process_btn = gr.Button(
-                    "🚀 Start Transcription",
+                    "🚀 Start",
                     variant="primary",
                     size="lg",
                 )
