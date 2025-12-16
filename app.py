@@ -246,7 +246,7 @@ def process_audio(
 
 def get_system_info() -> str:
     """Get system and GPU information."""
-    info_lines = ["### System Information\n"]
+    info_lines = ["**Source:** 中央研究院資訊科學研究所 [王新民](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html) 研究員"]
     
     gpu_info = get_gpu_info()
     if gpu_info:
@@ -267,16 +267,16 @@ def create_interface() -> gr.Blocks:
     """Create and return Gradio interface."""
     
     with gr.Blocks(
-        title="Whisper ASR Subtitle Generator",
+        title="Medical and Pharmaceutical ASR with Whisper",
         theme=gr.themes.Soft(),
         css=CUSTOM_CSS,
     ) as app:
         
         gr.Markdown(
             """
-            # 🎙️ Whisper ASR Subtitle Generator
+            # 🎙️ Medical and Pharmaceutical ASR with Whisper
             
-            Upload audio/video files or enter a YouTube URL to automatically generate SRT subtitles.
+            Note: large-v3-turbo is for transcription only.
             """
         )
         
@@ -303,13 +303,13 @@ def create_interface() -> gr.Blocks:
                 with gr.Row():
                     model_dropdown = gr.Dropdown(
                         choices=MODEL_SIZES,
-                        value=os.environ.get("WHISPER_MODEL", "large-v3"),
+                        value=os.environ.get("WHISPER_MODEL", "large-v3-turbo"),
                         label="Model Size",
                     )
                     
                     language_dropdown = gr.Dropdown(
                         choices=list(SUPPORTED_LANGUAGES.keys()),
-                        value="auto",
+                        value="en",
                         label="Language",
                     )
                 
