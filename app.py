@@ -23,6 +23,28 @@ from youtube_downloader import (
 from srt_utils import segments_to_srt, merge_segments
 
 
+# Custom CSS with Roboto font
+CUSTOM_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+
+* {
+    font-family: 'Roboto', sans-serif !important;
+}
+
+.gradio-container {
+    font-family: 'Roboto', sans-serif !important;
+}
+
+.prose {
+    font-family: 'Roboto', sans-serif !important;
+}
+
+textarea, input, button, select {
+    font-family: 'Roboto', sans-serif !important;
+}
+"""
+
+
 # Global transcriber instance
 transcriber: Optional[WhisperTranscriber] = None
 
@@ -55,12 +77,12 @@ def process_audio(
     merge_subtitles: bool,
     max_chars: int,
     progress=gr.Progress(),
-) -> Tuple[str, Optional[str], str]:
+) -> Tuple[str, str, Optional[str]]:
     """
     Process audio from file or YouTube URL.
     
     Returns:
-        Tuple of (SRT content, SRT file path, status message)
+        Tuple of (status message, SRT content, SRT file path)
     """
     audio_path = None
     temp_files = []
@@ -70,7 +92,7 @@ def process_audio(
         # Determine input source
         if youtube_url and youtube_url.strip():
             if not is_youtube_url(youtube_url):
-                return "", None, "❌ 無效的 YouTube 網址"
+                return "❌ 無效的 YouTube 網址", "", None
             
             progress(0.05, desc="取得影片資訊...")
             info = get_video_info(youtube_url)
@@ -88,7 +110,7 @@ def process_audio(
             )
             
             if audio_path is None:
-                return "", None, "❌ 下載失敗，請確認網址是否正確"
+                return "❌ 下載失敗，請確認網址是否正確", "", None
             
             if title:
                 video_title = title
@@ -98,7 +120,7 @@ def process_audio(
             audio_path = audio_file
             video_title = os.path.splitext(os.path.basename(audio_file))[0]
         else:
-            return "", None, "❌ 請上傳音檔或輸入 YouTube 網址"
+            return "❌ 請上傳音檔或輸入 YouTube 網址", "", None
         
         # Initialize transcriber
         progress(0.3, desc="載入模型中...")
@@ -116,7 +138,7 @@ def process_audio(
         )
         
         if not segments:
-            return "", None, "⚠️ 未偵測到語音內容"
+            return "⚠️ 未偵測到語音內容", "", None
         
         # Merge segments if requested
         if merge_subtitles:
@@ -141,12 +163,12 @@ def process_audio(
         progress(1.0, desc="完成！")
         
         status = f"✅ 轉錄完成！共 {len(segments)} 個字幕段落"
-        return srt_content, srt_path, status
+        return status, srt_content, srt_path
         
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return "", None, f"❌ 錯誤: {str(e)}"
+        return f"❌ 錯誤: {str(e)}", "", None
     
     finally:
         # Cleanup temp files
@@ -183,6 +205,7 @@ def create_interface() -> gr.Blocks:
     with gr.Blocks(
         title="Whisper ASR 字幕生成服務",
         theme=gr.themes.Soft(),
+        css=CUSTOM_CSS,
     ) as app:
         
         gr.Markdown(
@@ -302,7 +325,7 @@ def create_interface() -> gr.Blocks:
                 merge_checkbox,
                 max_chars_slider,
             ],
-            outputs=[srt_output, srt_file, status_text],
+            outputs=[status_text, srt_output, srt_file],
         )
         
         # Clear YouTube when audio uploaded and vice versa
