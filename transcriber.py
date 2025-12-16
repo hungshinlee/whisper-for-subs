@@ -39,10 +39,6 @@ SUPPORTED_LANGUAGES = {
 
 # Model sizes
 MODEL_SIZES = [
-    "tiny",
-    "base",
-    "small",
-    "medium",
     "large-v2",
     "large-v3",
     "large-v3-turbo",

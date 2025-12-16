@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple, Generator
 
 import gradio as gr
+import soundfile as sf
 
 from transcriber import (
     WhisperTranscriber,
@@ -133,12 +134,16 @@ def process_audio(
     Yields:
         Tuple of (status message, SRT content, SRT file path)
     """
+    # Record start time
+    start_time = time.time()
+    
     # Clean up old files periodically
     cleanup_old_files(max_age_hours=24)
     
     audio_path = None
     temp_files = []
     video_title = "output"
+    audio_duration = 0.0
     
     try:
         # Determine input source
@@ -176,6 +181,14 @@ def process_audio(
         else:
             yield "❌ Please upload an audio file or enter a YouTube URL", "", None
             return
+        
+        # Get audio duration
+        try:
+            audio_info = sf.info(audio_path)
+            audio_duration = audio_info.duration
+        except Exception as e:
+            print(f"Warning: Could not get audio duration: {e}")
+            audio_duration = 0.0
         
         # Initialize transcriber
         yield format_progress_html(35, "Loading Whisper model..."), "", None
@@ -226,7 +239,22 @@ def process_audio(
         with open(srt_path, "w", encoding="utf-8") as f:
             f.write(srt_content)
         
-        status = f"✅ Transcription complete! {len(segments)} subtitle segments generated."
+        # Calculate processing time
+        processing_time = time.time() - start_time
+        
+        # Format status message with duration and processing time
+        status_parts = [f"✅ Transcription complete! {len(segments)} subtitle segments generated."]
+        
+        if audio_duration > 0:
+            status_parts.append(f"Audio duration: {audio_duration:.1f}s")
+        
+        status_parts.append(f"Processing time: {processing_time:.1f}s")
+        
+        if audio_duration > 0 and processing_time > 0:
+            speed_ratio = audio_duration / processing_time
+            status_parts.append(f"Speed: {speed_ratio:.2f}x realtime")
+        
+        status = " | ".join(status_parts)
         yield status, srt_content, srt_path
         
     except Exception as e:
@@ -246,7 +274,7 @@ def process_audio(
 
 def get_system_info() -> str:
     """Get system and GPU information."""
-    info_lines = ["**Source:** 中央研究院資訊科學研究所 [王新民](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html) 研究員"]
+    info_lines = ["**Source:** [王新民](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html) 教授（中央研究院資訊科學研究所）\n"]
     
     gpu_info = get_gpu_info()
     if gpu_info:
