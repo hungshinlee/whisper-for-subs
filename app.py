@@ -183,7 +183,7 @@ def process_audio(
 def get_system_info() -> str:
     """Get system and GPU information."""
     # info_lines = ["### 系統資訊\n"]
-    info_lines = []
+    info_lines = [f"**來源:** 中研院資訊所 [王新民](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html) 研究員\n"]
     
     gpu_info = get_gpu_info()
     if gpu_info:
