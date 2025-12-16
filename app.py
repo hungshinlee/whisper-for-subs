@@ -296,6 +296,7 @@ def create_interface() -> gr.Blocks:
                 youtube_input = gr.Textbox(
                     label="YouTube URL",
                     placeholder="https://www.youtube.com/watch?v=...",
+                    value="https://www.youtube.com/watch?v=Z-RUXs5YOyE",
                 )
                 
                 gr.Markdown("### ⚙️ Settings")
