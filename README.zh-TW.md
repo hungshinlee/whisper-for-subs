@@ -145,6 +145,26 @@ docker compose logs -f
 
 Safari 通常不會對 IP 位址強制使用 HTTPS，應該可以直接存取。
 
+### 啟用麥克風存取（HTTP）
+
+瀏覽器需要 HTTPS 才能存取麥克風。若要在 HTTP 下啟用麥克風錄音：
+
+**Chrome**
+
+1. 在網址列輸入 `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
+2. 找到 **Insecure origins treated as secure**
+3. 輸入伺服器網址（例如 `http://140.109.20.213`）
+4. 將右邊的下拉選單改為 **Enabled**
+5. 點擊 **Relaunch** 重啟 Chrome
+
+**Firefox**
+
+1. 在網址列輸入 `about:config`
+2. 搜尋 `media.devices.insecure.enabled`
+3. 設定為 `true`
+4. 搜尋 `media.getusermedia.insecure.enabled`
+5. 設定為 `true`
+
 ## 配置選項
 
 ### 環境變數

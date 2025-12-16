@@ -145,6 +145,26 @@ Modern browsers may automatically redirect HTTP to HTTPS. Follow these steps to 
 
 Safari generally doesn't force HTTPS for IP addresses, so it should work directly.
 
+### Enable Microphone Access (HTTP)
+
+Browsers require HTTPS to access the microphone. To enable microphone recording over HTTP:
+
+**Chrome**
+
+1. Enter `chrome://flags/#unsafely-treat-insecure-origin-as-secure` in the address bar
+2. Find **Insecure origins treated as secure**
+3. Enter your server URL (e.g., `http://140.109.20.213`)
+4. Change the dropdown to **Enabled**
+5. Click **Relaunch** to restart Chrome
+
+**Firefox**
+
+1. Enter `about:config` in the address bar
+2. Search for `media.devices.insecure.enabled`
+3. Set it to `true`
+4. Search for `media.getusermedia.insecure.enabled`
+5. Set it to `true`
+
 ## Configuration
 
 ### Environment Variables
