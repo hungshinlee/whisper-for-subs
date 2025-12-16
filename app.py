@@ -421,7 +421,7 @@ def main():
     cleanup_old_files(max_age_hours=24)
     
     # Pre-load model if specified
-    default_model = os.environ.get("WHISPER_MODEL", "large-v3")
+    default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
     preload = os.environ.get("PRELOAD_MODEL", "false").lower() == "true"
     
     if preload:
