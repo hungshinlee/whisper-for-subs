@@ -185,9 +185,9 @@ def download_audio_with_progress(
             downloaded = d.get("downloaded_bytes", 0)
             if total > 0:
                 percent = (downloaded / total) * 100
-                progress_callback(percent, f"下載中... {percent:.1f}%")
+                progress_callback(percent, f"Downloading... {percent:.1f}%")
         elif d["status"] == "finished":
-            progress_callback(100, "下載完成，正在轉換格式...")
+            progress_callback(100, "Download complete. Converting format...")
     
     ydl_opts = {
         "format": "bestaudio/best",
@@ -227,5 +227,5 @@ def download_audio_with_progress(
             
     except Exception as e:
         if progress_callback:
-            progress_callback(0, f"錯誤: {str(e)}")
+            progress_callback(0, f"Error: {str(e)}")
         return None, None

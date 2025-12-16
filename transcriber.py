@@ -15,26 +15,26 @@ from vad import SileroVAD
 
 # Supported languages for Whisper
 SUPPORTED_LANGUAGES = {
-    "auto": "自動偵測",
-    "zh": "中文",
-    "en": "英文",
-    "ja": "日文",
-    "ko": "韓文",
-    "es": "西班牙文",
-    "fr": "法文",
-    "de": "德文",
-    "it": "義大利文",
-    "pt": "葡萄牙文",
-    "ru": "俄文",
-    "ar": "阿拉伯文",
-    "hi": "印地文",
-    "th": "泰文",
-    "vi": "越南文",
-    "id": "印尼文",
-    "ms": "馬來文",
-    "tl": "菲律賓文",
-    "nan": "台語（閩南語）",
-    "yue": "粵語",
+    "auto": "Auto Detect",
+    "zh": "Chinese",
+    "en": "English",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "th": "Thai",
+    "vi": "Vietnamese",
+    "id": "Indonesian",
+    "ms": "Malay",
+    "tl": "Filipino",
+    "nan": "Taiwanese (Hokkien)",
+    "yue": "Cantonese",
 }
 
 # Model sizes
@@ -158,19 +158,19 @@ class WhisperTranscriber:
             List of segments with start, end, text
         """
         if progress_callback:
-            progress_callback(0, "載入音檔中...")
+            progress_callback(0, "Loading audio...")
 
         # Load audio
         audio = self.load_audio(audio_path)
         duration = len(audio) / 16000  # seconds
 
         if progress_callback:
-            progress_callback(5, f"音檔長度: {duration:.1f} 秒")
+            progress_callback(5, f"Audio duration: {duration:.1f} seconds")
 
         # Use VAD for segmentation if enabled
         if self.use_vad and self.vad is not None:
             if progress_callback:
-                progress_callback(10, "使用 VAD 偵測語音段落...")
+                progress_callback(10, "Detecting speech segments with VAD...")
             return self._transcribe_with_vad(
                 audio,
                 duration,
@@ -211,11 +211,11 @@ class WhisperTranscriber:
 
         if not chunks:
             if progress_callback:
-                progress_callback(100, "未偵測到語音")
+                progress_callback(100, "No speech detected")
             return []
 
         if progress_callback:
-            progress_callback(15, f"偵測到 {len(chunks)} 個語音段落")
+            progress_callback(15, f"Detected {len(chunks)} speech segments")
 
         segments = []
         
@@ -225,7 +225,7 @@ class WhisperTranscriber:
             if progress_callback:
                 progress_callback(
                     progress,
-                    f"轉錄中 ({i+1}/{len(chunks)})..."
+                    f"Transcribing ({i+1}/{len(chunks)})..."
                 )
 
             # Save chunk to temp file for transcription
@@ -259,7 +259,7 @@ class WhisperTranscriber:
                     os.unlink(temp_chunk.name)
 
         if progress_callback:
-            progress_callback(100, f"完成！共 {len(segments)} 個段落")
+            progress_callback(100, f"Complete! {len(segments)} segments")
 
         return segments
 
@@ -274,7 +274,7 @@ class WhisperTranscriber:
     ) -> List[dict]:
         """Transcribe without VAD (use Whisper's built-in VAD)."""
         if progress_callback:
-            progress_callback(20, "開始轉錄...")
+            progress_callback(20, "Starting transcription...")
 
         result, info = self.model.transcribe(
             audio_path,
@@ -297,10 +297,10 @@ class WhisperTranscriber:
                 # Estimate progress based on timestamp
                 if info.duration > 0:
                     progress = 20 + (seg.end / info.duration) * 75
-                    progress_callback(progress, f"轉錄中... {seg.end:.1f}s")
+                    progress_callback(progress, f"Transcribing... {seg.end:.1f}s")
 
         if progress_callback:
-            progress_callback(100, f"完成！共 {len(segments)} 個段落")
+            progress_callback(100, f"Complete! {len(segments)} segments")
 
         return segments
 

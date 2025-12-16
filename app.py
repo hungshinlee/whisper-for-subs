@@ -144,14 +144,14 @@ def process_audio(
         # Determine input source
         if youtube_url and youtube_url.strip():
             if not is_youtube_url(youtube_url):
-                yield "❌ 無效的 YouTube 網址", "", None
+                yield "❌ Invalid YouTube URL", "", None
                 return
             
-            yield format_progress_html(5, "取得影片資訊..."), "", None
+            yield format_progress_html(5, "Fetching video information..."), "", None
             info = get_video_info(youtube_url)
             if info:
                 video_title = info.get("title", "youtube_audio")
-                yield format_progress_html(10, f"下載中: {video_title[:40]}..."), "", None
+                yield format_progress_html(10, f"Downloading: {video_title[:40]}..."), "", None
             
             # Download audio
             audio_path, title = download_audio_with_progress(
@@ -159,10 +159,10 @@ def process_audio(
                 progress_callback=None,
             )
             
-            yield format_progress_html(30, "下載完成"), "", None
+            yield format_progress_html(30, "Download complete"), "", None
             
             if audio_path is None:
-                yield "❌ 下載失敗，請確認網址是否正確", "", None
+                yield "❌ Download failed. Please check the URL.", "", None
                 return
             
             if title:
@@ -172,16 +172,16 @@ def process_audio(
         elif audio_file:
             audio_path = audio_file
             video_title = os.path.splitext(os.path.basename(audio_file))[0]
-            yield format_progress_html(10, "音檔已載入"), "", None
+            yield format_progress_html(10, "Audio file loaded"), "", None
         else:
-            yield "❌ 請上傳音檔或輸入 YouTube 網址", "", None
+            yield "❌ Please upload an audio file or enter a YouTube URL", "", None
             return
         
         # Initialize transcriber
-        yield format_progress_html(35, "載入 Whisper 模型中..."), "", None
+        yield format_progress_html(35, "Loading Whisper model..."), "", None
         trans = get_transcriber(model_size, use_vad)
         
-        yield format_progress_html(40, "模型載入完成，開始轉錄..."), "", None
+        yield format_progress_html(40, "Model loaded. Starting transcription..."), "", None
         
         # Transcribe with progress updates
         last_progress = [40]  # Use list to allow modification in nested function
@@ -198,19 +198,19 @@ def process_audio(
             progress_callback=transcribe_progress,
         )
         
-        yield format_progress_html(85, "轉錄完成"), "", None
+        yield format_progress_html(85, "Transcription complete"), "", None
         
         if not segments:
-            yield "⚠️ 未偵測到語音內容", "", None
+            yield "⚠️ No speech detected", "", None
             return
         
         # Merge segments if requested
         if merge_subtitles:
-            yield format_progress_html(90, "合併字幕段落..."), "", None
+            yield format_progress_html(90, "Merging subtitle segments..."), "", None
             segments = merge_segments(segments, max_chars=max_chars)
         
         # Generate SRT
-        yield format_progress_html(95, "生成 SRT 檔案..."), "", None
+        yield format_progress_html(95, "Generating SRT file..."), "", None
         srt_content = segments_to_srt(segments)
         
         # Save SRT file
@@ -226,13 +226,13 @@ def process_audio(
         with open(srt_path, "w", encoding="utf-8") as f:
             f.write(srt_content)
         
-        status = f"✅ 轉錄完成！共 {len(segments)} 個字幕段落"
+        status = f"✅ Transcription complete! {len(segments)} subtitle segments generated."
         yield status, srt_content, srt_path
         
     except Exception as e:
         import traceback
         traceback.print_exc()
-        yield f"❌ 錯誤: {str(e)}", "", None
+        yield f"❌ Error: {str(e)}", "", None
     
     finally:
         # Cleanup temp files
@@ -246,18 +246,18 @@ def process_audio(
 
 def get_system_info() -> str:
     """Get system and GPU information."""
-    info_lines = ["### 系統資訊\n"]
+    info_lines = ["### System Information\n"]
     
     gpu_info = get_gpu_info()
     if gpu_info:
-        info_lines.append(f"**GPU 數量:** {len(gpu_info)}\n")
+        info_lines.append(f"**GPU Count:** {len(gpu_info)}\n")
         for gpu in gpu_info:
             info_lines.append(
                 f"- GPU {gpu['index']}: {gpu['name']} "
                 f"({gpu['memory_total']:.1f} GB)"
             )
     else:
-        info_lines.append("**GPU:** 無可用 GPU，使用 CPU 模式")
+        info_lines.append("**GPU:** No GPU available. Using CPU mode.")
     
     return "\n".join(info_lines)
 
@@ -267,70 +267,70 @@ def create_interface() -> gr.Blocks:
     """Create and return Gradio interface."""
     
     with gr.Blocks(
-        title="Whisper ASR 字幕生成服務",
+        title="Whisper ASR Subtitle Generator",
         theme=gr.themes.Soft(),
         css=CUSTOM_CSS,
     ) as app:
         
         gr.Markdown(
             """
-            # 🎙️ Whisper ASR 字幕生成服務
+            # 🎙️ Whisper ASR Subtitle Generator
             
-            上傳音檔、影片，或輸入 YouTube 網址，自動生成 SRT 字幕檔。
+            Upload audio/video files or enter a YouTube URL to automatically generate SRT subtitles.
             """
         )
         
         with gr.Row():
             # Left column: Input
             with gr.Column(scale=1):
-                gr.Markdown("### 📥 輸入")
+                gr.Markdown("### 📥 Input")
                 
                 audio_input = gr.Audio(
-                    label="上傳音檔或影片",
+                    label="Upload Audio or Video",
                     type="filepath",
                     sources=["upload", "microphone"],
                 )
                 
-                gr.Markdown("**或**")
+                gr.Markdown("**OR**")
                 
                 youtube_input = gr.Textbox(
-                    label="YouTube 網址",
+                    label="YouTube URL",
                     placeholder="https://www.youtube.com/watch?v=...",
                 )
                 
-                gr.Markdown("### ⚙️ 設定")
+                gr.Markdown("### ⚙️ Settings")
                 
                 with gr.Row():
                     model_dropdown = gr.Dropdown(
                         choices=MODEL_SIZES,
                         value=os.environ.get("WHISPER_MODEL", "large-v3"),
-                        label="模型大小",
+                        label="Model Size",
                     )
                     
                     language_dropdown = gr.Dropdown(
                         choices=list(SUPPORTED_LANGUAGES.keys()),
                         value="auto",
-                        label="語言",
+                        label="Language",
                     )
                 
                 with gr.Row():
                     task_radio = gr.Radio(
                         choices=[
-                            ("轉錄 (Transcribe)", "transcribe"),
-                            ("翻譯成英文 (Translate)", "translate"),
+                            ("Transcribe", "transcribe"),
+                            ("Translate to English", "translate"),
                         ],
                         value="transcribe",
-                        label="功能",
+                        label="Task",
                     )
                 
                 with gr.Row():
                     use_vad_checkbox = gr.Checkbox(
                         value=True,
-                        label="使用 VAD 語音偵測",
+                        label="Enable VAD (Voice Activity Detection)",
                     )
                     merge_checkbox = gr.Checkbox(
                         value=True,
-                        label="合併短字幕",
+                        label="Merge Short Subtitles",
                     )
                 
                 max_chars_slider = gr.Slider(
@@ -338,38 +338,38 @@ def create_interface() -> gr.Blocks:
                     maximum=120,
                     value=80,
                     step=10,
-                    label="每行最大字數",
+                    label="Max Characters Per Line",
                     visible=True,
                 )
                 
                 process_btn = gr.Button(
-                    "🚀 開始轉錄",
+                    "🚀 Start Transcription",
                     variant="primary",
                     size="lg",
                 )
             
             # Right column: Output
             with gr.Column(scale=1):
-                gr.Markdown("### 📤 輸出")
+                gr.Markdown("### 📤 Output")
                 
-                status_text = gr.HTML("等待輸入...")
+                status_text = gr.HTML("Waiting for input...")
                 
                 srt_output = gr.Textbox(
-                    label="SRT 字幕內容",
+                    label="SRT Subtitle Content",
                     lines=20,
                     max_lines=30,
                 )
                 
                 srt_file = gr.File(
-                    label="下載 SRT 檔案",
+                    label="Download SRT File",
                 )
         
         # System info
-        with gr.Accordion("系統資訊", open=False):
+        with gr.Accordion("System Information", open=False):
             system_info = gr.Markdown(get_system_info())
         
         # Language mapping display
-        with gr.Accordion("支援語言列表", open=False):
+        with gr.Accordion("Supported Languages", open=False):
             lang_info = "\n".join(
                 f"- `{code}`: {name}"
                 for code, name in SUPPORTED_LANGUAGES.items()
