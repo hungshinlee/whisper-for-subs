@@ -32,9 +32,7 @@ SUPPORTED_LANGUAGES = {
     "vi": "Vietnamese",
     "id": "Indonesian",
     "ms": "Malay",
-    "tl": "Filipino",
-    "nan": "Taiwanese (Hokkien)",
-    "yue": "Cantonese",
+    "tl": "Filipino"
 }
 
 # Model sizes
