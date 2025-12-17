@@ -101,70 +101,6 @@ docker compose logs -f
 
 Open your browser and navigate to: `http://your-server-ip`
 
-> **Note**: The service uses HTTP (port 80). If your browser automatically redirects to HTTPS, see [Browser Settings](#browser-settings-for-http-access) below.
-
-## Browser Settings for HTTP Access
-
-Modern browsers may automatically redirect HTTP to HTTPS. Follow these steps to access the service via HTTP:
-
-### Chrome
-
-**Step 1: Disable "Always use secure connections"**
-
-1. Enter `chrome://settings/security` in the address bar
-2. Find "Always use secure connections"
-3. **Turn it off**
-
-**Step 2: Clear HSTS record for the IP**
-
-1. Enter `chrome://net-internals/#hsts` in the address bar
-2. Scroll down to **Delete domain security policies**
-3. Enter your server IP (e.g., `140.109.20.213`)
-4. Click **Delete**
-
-**Step 3: Clear browser cache**
-
-1. Press `Cmd + Shift + Delete` (Mac) or `Ctrl + Shift + Delete` (Windows)
-2. Select "All time" for time range
-3. Check "Cached images and files"
-4. Click "Clear data"
-
-**Step 4: Restart Chrome**
-
-1. Completely quit Chrome (`Cmd + Q` on Mac)
-2. Reopen Chrome
-3. Navigate to `http://your-server-ip`
-
-### Firefox
-
-1. Enter `about:config` in the address bar
-2. Search for `dom.security.https_only_mode`
-3. Set it to `false`
-
-### Safari
-
-Safari generally doesn't force HTTPS for IP addresses, so it should work directly.
-
-### Enable Microphone Access (HTTP)
-
-Browsers require HTTPS to access the microphone. To enable microphone recording over HTTP:
-
-**Chrome**
-
-1. Enter `chrome://flags/#unsafely-treat-insecure-origin-as-secure` in the address bar
-2. Find **Insecure origins treated as secure**
-3. Enter your server URL (e.g., `http://140.109.20.213`)
-4. Change the dropdown to **Enabled**
-5. Click **Relaunch** to restart Chrome
-
-**Firefox**
-
-1. Enter `about:config` in the address bar
-2. Search for `media.devices.insecure.enabled`
-3. Set it to `true`
-4. Search for `media.getusermedia.insecure.enabled`
-5. Set it to `true`
-
 ## Configuration
 
 ### Environment Variables
@@ -183,10 +119,6 @@ Configure the following environment variables in `docker-compose.yml`:
 
 | Model | VRAM Required | Speed | Quality |
 |-------|---------------|-------|---------|
-| `tiny` | ~1 GB | Fastest | Fair |
-| `base` | ~1 GB | Very Fast | Fair |
-| `small` | ~2 GB | Fast | Good |
-| `medium` | ~5 GB | Medium | Very Good |
 | `large-v2` | ~10 GB | Slower | Excellent |
 | `large-v3` | ~10 GB | Slower | Best |
 | `large-v3-turbo` | ~6 GB | Fast | Excellent |
