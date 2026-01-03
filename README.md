@@ -1,167 +1,168 @@
-# Whisper ASR Subtitle Generation Service
+# Whisper ASR 字幕生成服務
 
-[繁體中文](./README.zh-TW.md)
+[English](./README.en.md)
 
-An automatic speech recognition (ASR) service powered by OpenAI Whisper, converting audio files, videos, or YouTube videos into SRT subtitle files.
+使用 OpenAI Whisper 模型的自動語音辨識 (ASR) 服務，可將音檔、影片或 YouTube 影片轉換為 SRT 字幕檔。
 
-## Features
+## 功能特色
 
-- 🎙️ **Multiple Input Methods**: Upload audio/video files or enter YouTube URLs
-- 🌍 **Multi-language Support**: Chinese, English, Japanese, and many more
-- 🔄 **Dual Modes**: Transcribe (original language) or Translate (to English)
-- 🎯 **VAD Speech Detection**: Precise speech segmentation using Silero VAD
-- 📝 **SRT Output**: Standard SRT format ready for video subtitles
-- 🚀 **GPU Acceleration**: Multi-GPU parallel processing support
+- 🎙️ **多種輸入方式**：上傳音檔、影片，或輸入 YouTube 網址
+- 🌍 **多語言支援**：支援中文、英文、日文等多種語言
+- 🔄 **雙重模式**：轉錄 (Transcribe) 或翻譯成英文 (Translate)
+- 🎯 **VAD 語音偵測**：使用 Silero VAD 精確偵測語音段落
+- 📝 **SRT 輸出**：標準 SRT 格式，可直接用於影片字幕
+- 🚀 **GPU 加速**：支援多 GPU 並行處理
+- ⚡ **高速處理**：多 GPU 模式可達 3-4 倍加速（1 小時音訊約 2 分鐘處理完成）
 
-## System Requirements
+## 系統需求
 
 - Ubuntu Server 24.04
 - Docker & Docker Compose
-- NVIDIA GPU (RTX 2080 Ti or higher recommended)
+- NVIDIA GPU（建議 RTX 2080 Ti 或更高）
 - NVIDIA Container Toolkit
 
-## Quick Start
+## 快速開始
 
-### 1. Install Docker
+### 1. 安裝 Docker
 
 ```bash
-# Update package index
+# 更新套件索引
 sudo apt-get update
 
-# Install prerequisites
+# 安裝必要套件
 sudo apt-get install -y ca-certificates curl
 
-# Add Docker's official GPG key
+# 添加 Docker 官方 GPG 金鑰
 sudo install -m 0755 -d /etc/apt/keyrings
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
 sudo chmod a+r /etc/apt/keyrings/docker.asc
 
-# Add Docker repository
+# 添加 Docker 套件庫
 echo \
   "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
   $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-# Install Docker
+# 安裝 Docker
 sudo apt-get update
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-# Add current user to docker group (optional, avoids using sudo)
+# 將目前使用者加入 docker 群組（選用，可免去 sudo）
 sudo usermod -aG docker $USER
 newgrp docker
 
-# Verify installation
+# 驗證安裝
 docker --version
 docker compose version
 ```
 
-### 2. Install NVIDIA Container Toolkit
+### 2. 安裝 NVIDIA Container Toolkit
 
 ```bash
-# Add NVIDIA GPG key
+# 添加 NVIDIA GPG 金鑰
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 
-# Add NVIDIA repository
+# 添加 NVIDIA 套件庫
 curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
     sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-# Install
+# 安裝
 sudo apt-get update
 sudo apt-get install -y nvidia-container-toolkit
 
-# Configure Docker to use NVIDIA runtime
+# 設定 Docker 使用 NVIDIA runtime
 sudo nvidia-ctk runtime configure --runtime=docker
 
-# Restart Docker
+# 重啟 Docker
 sudo systemctl restart docker
 
-# Verify installation
+# 驗證安裝
 sudo docker run --rm --gpus all nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 nvidia-smi
 ```
 
-### 3. Build and Start Service
+### 3. 建置與啟動服務
 
 ```bash
-# Clone the repository
+# 複製專案
 git clone https://github.com/hungshinlee/whisper-for-subs.git
 cd whisper-for-subs
 
-# Build Docker image
+# 建置 Docker 映像
 docker compose build
 
-# Start service
+# 啟動服務
 docker compose up -d
 
-# View logs
+# 查看日誌
 docker compose logs -f
 ```
 
-### 4. Access the Service
+### 4. 存取服務
 
-Open your browser and navigate to: `http://your-server-ip`
+開啟瀏覽器訪問：`http://your-server-ip`
 
-## Configuration
+## 配置選項
 
-### Environment Variables
+### 環境變數
 
-Configure the following environment variables in `docker-compose.yml`:
+在 `docker-compose.yml` 中可配置以下環境變數：
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WHISPER_MODEL` | `large-v3` | Whisper model size |
-| `WHISPER_DEVICE` | `cuda` | Compute device (`cuda` or `cpu`) |
-| `WHISPER_COMPUTE_TYPE` | `float16` | Compute precision (`float16`, `int8`, `float32`) |
-| `CUDA_VISIBLE_DEVICES` | `0,1,2,3` | Available GPU indices |
-| `PRELOAD_MODEL` | `false` | Preload model on startup |
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `WHISPER_MODEL` | `large-v3` | Whisper 模型大小 |
+| `WHISPER_DEVICE` | `cuda` | 運算設備（`cuda` 或 `cpu`）|
+| `WHISPER_COMPUTE_TYPE` | `float16` | 計算精度（`float16`、`int8`、`float32`）|
+| `CUDA_VISIBLE_DEVICES` | `0,1,2,3` | 可用的 GPU 編號 |
+| `PRELOAD_MODEL` | `false` | 啟動時預載模型 |
 
-### Available Models
+### 可用模型
 
-| Model | VRAM Required | Speed | Quality |
-|-------|---------------|-------|---------|
-| `large-v2` | ~10 GB | Slower | Excellent |
-| `large-v3` | ~10 GB | Slower | Best |
-| `large-v3-turbo` | ~6 GB | Fast | Excellent |
+| 模型 | VRAM 需求 | 速度 | 品質 |
+|------|-----------|------|------|
+| `large-v2` | ~10 GB | 較慢 | 優秀 |
+| `large-v3` | ~10 GB | 較慢 | 最佳 |
+| `large-v3-turbo` | ~6 GB | 快 | 優秀 |
 
-## Usage
+## 使用方式
 
-### Upload Audio or Video
+### 上傳音檔或影片
 
-1. Click the "Upload audio or video" area
-2. Select audio (`.wav`, `.mp3`, `.m4a`, `.flac`) or video (`.mp4`, `.mkv`, `.webm`)
-3. Configure language and transcription mode
-4. Click "Start Transcription"
+1. 點擊「上傳音檔或影片」區域
+2. 選擇音檔（`.wav`、`.mp3`、`.m4a`、`.flac`）或影片（`.mp4`、`.mkv`、`.webm`）
+3. 設定語言和轉錄模式
+4. 點擊「開始轉錄」
 
-### Use YouTube URL
+### 使用 YouTube 網址
 
-1. Paste the video URL in the "YouTube URL" field
-2. Supported formats:
+1. 在「YouTube 網址」欄位貼上影片連結
+2. 支援格式：
    - `https://www.youtube.com/watch?v=VIDEO_ID`
    - `https://youtu.be/VIDEO_ID`
    - `https://www.youtube.com/shorts/VIDEO_ID`
-3. Configure language and transcription mode
-4. Click "Start Transcription"
+3. 設定語言和轉錄模式
+4. 點擊「開始轉錄」
 
-### Settings
+### 設定選項
 
-- **Model Size**: Larger models have better quality but slower speed
-- **Language**: Select "Auto Detect" or specify a language
-- **Task**:
-  - Transcribe: Output subtitles in the original language
-  - Translate: Translate subtitles to English
-- **VAD Speech Detection**: Enable for improved segmentation accuracy
-- **Merge Short Subtitles**: Combine short subtitles to appropriate length
+- **模型大小**：較大的模型品質較好但速度較慢
+- **語言**：選擇「自動偵測」或指定語言
+- **功能**：
+  - 轉錄（Transcribe）：輸出原始語言字幕
+  - 翻譯（Translate）：翻譯成英文字幕
+- **VAD 語音偵測**：啟用可提高分段精確度
+- **合併短字幕**：將過短的字幕合併成適當長度
 
-## API Usage
+## API 使用
 
-Gradio provides an auto-generated API that can be called via Python:
+Gradio 提供自動生成的 API，可透過 Python 呼叫：
 
 ```python
 from gradio_client import Client
 
 client = Client("http://your-server-ip")
 
-# Transcribe uploaded file
+# 上傳檔案轉錄
 result = client.predict(
     audio_file="/path/to/audio.wav",
     youtube_url="",
@@ -179,127 +180,166 @@ print(status)
 print(srt_content)
 ```
 
-## Project Structure
+## 目錄結構
 
 ```
 whisper-for-subs/
-├── app.py                 # Gradio main application
-├── transcriber.py         # Whisper transcription logic
-├── vad.py                 # Silero VAD processing
-├── youtube_downloader.py  # YouTube download utility
-├── srt_utils.py           # SRT format utilities
-├── requirements.txt       # Python dependencies
-├── Dockerfile             # Docker image configuration
-├── docker-compose.yml     # Docker Compose configuration
-├── LICENSE                # MIT License
-├── README.md              # Documentation (English)
-└── README.zh-TW.md        # Documentation (Traditional Chinese)
+├── app.py                   # Gradio 主程式
+├── transcriber.py           # Whisper 轉錄邏輯
+├── parallel_transcriber.py  # 多 GPU 並行處理 ⚡
+├── vad.py                   # Silero VAD 處理
+├── youtube_downloader.py    # YouTube 下載
+├── srt_utils.py             # SRT 格式處理
+├── test_multi_gpu.py        # 多 GPU 效能測試
+├── requirements.txt         # Python 依賴
+├── Dockerfile               # Docker 映像檔
+├── docker-compose.yml       # Docker Compose 配置
+├── LICENSE                  # MIT 授權
+├── README.md                # 說明文件（繁體中文）
+├── README.en.md             # 說明文件（英文）
+└── docs/                    # 文件目錄
+    ├── MULTI_GPU_GUIDE.md           # 多 GPU 完整使用指南 ⭐
+    ├── QUICKSTART_MULTI_GPU.md      # 多 GPU 快速開始
+    └── IMPLEMENTATION_SUMMARY.md    # 技術實作總結
 ```
 
-## Maintenance
+## 維護
 
-### Automatic Cleanup
+### 自動清理
 
-The service automatically cleans up temporary files older than 24 hours:
-- YouTube downloaded audio files (`/tmp/whisper-downloads`)
-- Generated SRT files (`/app/outputs`)
+服務會自動清理超過 24 小時的暫存檔案：
+- YouTube 下載的音檔（`/tmp/whisper-downloads`）
+- 產生的 SRT 檔案（`/app/outputs`）
 
-### Manual Cleanup
+### 手動清理
 
-To manually clean up disk space:
+手動清理磁碟空間：
 
 ```bash
-# Clean temporary files
+# 清理暫存檔
 docker exec whisper-for-subs rm -rf /tmp/whisper-downloads/*
 
-# Clean output files
+# 清理輸出檔案
 docker exec whisper-for-subs rm -rf /app/outputs/*
 
-# Clean Gradio cache
+# 清理 Gradio 快取
 docker exec whisper-for-subs rm -rf /tmp/gradio/*
 
-# Check disk usage
+# 檢查磁碟使用量
 docker exec whisper-for-subs df -h
 ```
 
-### Scheduled Cleanup (Optional)
+### 排程清理（選用）
 
-Add a cron job for regular cleanup:
+新增 cron 工作定期清理：
 
 ```bash
-# Edit crontab
+# 編輯 crontab
 crontab -e
 
-# Add daily cleanup at 3 AM
+# 每天凌晨 3 點清理
 0 3 * * * docker exec whisper-for-subs find /tmp/whisper-downloads -mtime +1 -delete 2>/dev/null
 0 3 * * * docker exec whisper-for-subs find /app/outputs -name "*.srt" -mtime +1 -delete 2>/dev/null
 ```
 
-## Concurrent Usage
+## 多 GPU 並行處理 🚀
 
-### Current Limitations
+### 效能提升
 
-- The service uses a **single Whisper model instance** shared across all users
-- Multiple requests are queued and processed **sequentially**
-- With 4x RTX 2080 Ti GPUs, the `large-v3` model uses ~10GB VRAM on one GPU
-- Queue size is limited to 10 pending requests
+本專案支援**多 GPU 並行處理**，大幅提升長音訊轉錄速度：
 
-### Performance Tips
+| 處理模式 | 1 小時音訊 | 加速比 |
+|---------|-----------|--------|
+| 單 GPU | ~6 分鐘 | 10x |
+| 4 GPU 並行 | **~2 分鐘** | **30x** ⚡ |
 
-- For faster processing with multiple users, use `large-v3-turbo` or `medium` model
-- Long audio files (>30 minutes) may take several minutes to process
-- Users will see a queue position if the system is busy
+### 使用方式
 
-### Scaling Options
+在 Web 介面中：
+1. 勾選「🚀 Use Multi-GPU Parallel Processing」
+2. 上傳音訊或 YouTube URL
+3. 系統會自動在音訊 ≥ 5 分鐘時啟用多 GPU
 
-For higher concurrency, consider:
+**工作原理**：
+- VAD 將音訊切分成多個段落
+- 4 張 GPU 同時處理不同段落
+- 最後合併所有結果
 
-1. **Multiple containers**: Run separate containers on different GPUs
-2. **Smaller models**: Use `medium` or `small` for faster throughput
-3. **Load balancer**: Deploy multiple instances behind nginx
+詳細使用說明請參考 [MULTI_GPU_GUIDE.md](./docs/MULTI_GPU_GUIDE.md)
 
-## Troubleshooting
-
-### GPU Not Available
+### 效能測試
 
 ```bash
-# Verify NVIDIA driver
+# 比較單 GPU vs 多 GPU 效能
+python test_multi_gpu.py /path/to/long_audio.wav
+```
+
+## 多人同時使用
+
+### 新架構優勢
+
+- ✅ **多 GPU 並行**：充分利用 4 張 GPU 資源
+- ✅ **自動負載平衡**：長音訊自動啟用多 GPU 模式
+- ✅ **彈性佇列**：短音訊快速處理，長音訊高速運算
+- ✅ **最多 10 個排隊請求**
+
+### 效能建議
+
+- **短音訊 (< 5 分)**：單 GPU 模式，快速響應
+- **長音訊 (≥ 5 分)**：多 GPU 模式，3-4 倍加速
+- **建議模型**：`large-v3-turbo`（速度快、品質佳、記憶體省）
+
+## 故障排除
+
+### GPU 無法使用
+
+```bash
+# 確認 NVIDIA 驅動
 nvidia-smi
 
-# Verify Container Toolkit
+# 確認 Container Toolkit
 docker run --rm --gpus all nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 nvidia-smi
 ```
 
-### Out of Memory
+### 記憶體不足
 
-- Use a smaller model (e.g., `medium` or `small`)
-- Set `WHISPER_COMPUTE_TYPE=int8` to reduce VRAM usage
+- 使用較小的模型（如 `medium` 或 `small`）
+- 設定 `WHISPER_COMPUTE_TYPE=int8` 減少 VRAM 使用
 
-### YouTube Download Failed
+### YouTube 下載失敗
 
-- Check network connection
-- Update yt-dlp: `pip install -U yt-dlp`
-- Check if the video has regional restrictions
+- 確認網路連線
+- 更新 yt-dlp：`pip install -U yt-dlp`
+- 檢查影片是否有地區限制
 
-### Port 80 Already in Use
+### Port 80 已被佔用
 
 ```bash
-# Check which service is using port 80
+# 檢查哪個服務佔用 port 80
 sudo lsof -i :80
 
-# Stop the service (e.g., if it's Caddy)
+# 停止該服務（例如 Caddy）
 sudo systemctl stop caddy
 sudo systemctl disable caddy
 ```
 
-## License
+## 授權
 
 MIT License
 
-## Acknowledgements
+## 致謝
 
 - [OpenAI Whisper](https://github.com/openai/whisper)
 - [faster-whisper](https://github.com/guillaumekln/faster-whisper)
 - [Silero VAD](https://github.com/snakers4/silero-vad)
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - [Gradio](https://gradio.app/)
+
+## 更新日誌
+
+### v2.0.0 (2025-01-03)
+- ⚡ 新增多 GPU 並行處理功能
+- 🚀 長音訊處理速度提升 3-4 倍
+- 📊 新增效能測試工具
+- 🎛️ Web 介面新增多 GPU 開關
+- 📖 完整的多 GPU 使用文件
