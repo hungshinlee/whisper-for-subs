@@ -19,6 +19,10 @@ from transcriber import (
     MODEL_SIZES,
     get_gpu_info,
 )
+from parallel_transcriber import (
+    ParallelWhisperTranscriber,
+    transcribe_with_multiple_gpus,
+)
 from youtube_downloader import (
     is_youtube_url,
     download_audio_with_progress,
@@ -53,8 +57,9 @@ textarea, input, button, select {
 """
 
 
-# Global transcriber instance
+# Global transcriber instances
 transcriber: Optional[WhisperTranscriber] = None
+parallel_transcriber: Optional[ParallelWhisperTranscriber] = None
 
 
 def cleanup_old_files(max_age_hours: int = 24):
@@ -91,7 +96,7 @@ def get_transcriber(
     model_size: str = "large-v3",
     use_vad: bool = True,
 ) -> WhisperTranscriber:
-    """Get or create transcriber instance."""
+    """Get or create single-GPU transcriber instance."""
     global transcriber
     
     if transcriber is None or transcriber.model_size != model_size:
@@ -103,6 +108,26 @@ def get_transcriber(
         )
     
     return transcriber
+
+
+def get_parallel_transcriber(
+    model_size: str = "large-v3",
+) -> ParallelWhisperTranscriber:
+    """Get or create multi-GPU transcriber instance."""
+    global parallel_transcriber
+    
+    if parallel_transcriber is None or parallel_transcriber.model_size != model_size:
+        # Parse GPU IDs from environment
+        gpu_ids_str = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3")
+        gpu_ids = [int(x.strip()) for x in gpu_ids_str.split(",") if x.strip()]
+        
+        parallel_transcriber = ParallelWhisperTranscriber(
+            model_size=model_size,
+            compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "float16"),
+            gpu_ids=gpu_ids,
+        )
+    
+    return parallel_transcriber
 
 
 def format_progress_html(percent: int, message: str) -> str:
@@ -127,6 +152,7 @@ def process_audio(
     use_vad: bool,
     merge_subtitles: bool,
     max_chars: int,
+    use_multi_gpu: bool,
 ) -> Generator[Tuple[str, str, Optional[str]], None, None]:
     """
     Process audio from file or YouTube URL.
@@ -190,26 +216,48 @@ def process_audio(
             print(f"Warning: Could not get audio duration: {e}")
             audio_duration = 0.0
         
-        # Initialize transcriber
-        yield format_progress_html(35, "Loading Whisper model..."), "", None
-        trans = get_transcriber(model_size, use_vad)
+        # Decide whether to use multi-GPU based on audio duration and user choice
+        use_parallel = use_multi_gpu and audio_duration >= 300  # 5+ minutes
+        num_gpus_used = 1
         
-        yield format_progress_html(40, "Model loaded. Starting transcription..."), "", None
-        
-        # Transcribe with progress updates
-        last_progress = [40]  # Use list to allow modification in nested function
-        
-        def transcribe_progress(pct, msg):
-            # Map transcriber progress (0-100) to our range (40-85)
-            mapped = 40 + int(pct * 0.45)
-            last_progress[0] = mapped
-        
-        segments = trans.transcribe(
-            audio_path,
-            language=language if language != "auto" else None,
-            task=task,
-            progress_callback=transcribe_progress,
-        )
+        if use_parallel:
+            # Multi-GPU parallel processing
+            yield format_progress_html(35, "Loading models on multiple GPUs..."), "", None
+            para_trans = get_parallel_transcriber(model_size)
+            num_gpus_used = para_trans.num_gpus
+            
+            yield format_progress_html(40, f"Starting parallel transcription on {num_gpus_used} GPUs..."), "", None
+            
+            def transcribe_progress(pct, msg):
+                pass  # Progress handled internally
+            
+            segments = para_trans.transcribe_parallel(
+                audio_path,
+                language=language if language != "auto" else None,
+                task=task,
+                progress_callback=transcribe_progress,
+            )
+        else:
+            # Single GPU processing
+            yield format_progress_html(35, "Loading Whisper model..."), "", None
+            trans = get_transcriber(model_size, use_vad)
+            
+            yield format_progress_html(40, "Model loaded. Starting transcription..."), "", None
+            
+            # Transcribe with progress updates
+            last_progress = [40]  # Use list to allow modification in nested function
+            
+            def transcribe_progress(pct, msg):
+                # Map transcriber progress (0-100) to our range (40-85)
+                mapped = 40 + int(pct * 0.45)
+                last_progress[0] = mapped
+            
+            segments = trans.transcribe(
+                audio_path,
+                language=language if language != "auto" else None,
+                task=task,
+                progress_callback=transcribe_progress,
+            )
         
         yield format_progress_html(85, "Transcription complete"), "", None
         
@@ -243,7 +291,10 @@ def process_audio(
         processing_time = time.time() - start_time
         
         # Format status message with duration and processing time
+        gpu_info = f"{num_gpus_used} GPUs" if use_parallel else "1 GPU"
         status_parts = [f"✅ Transcription complete! {len(segments)} subtitle segments generated.\n"]
+        
+        status_parts.append(f"Mode: {gpu_info}")
         
         if audio_duration > 0:
             status_parts.append(f"Audio duration: {audio_duration:.1f}s")
@@ -252,7 +303,7 @@ def process_audio(
         
         if audio_duration > 0 and processing_time > 0:
             speed_ratio = audio_duration / processing_time
-            status_parts.append(f"Speed: {speed_ratio:.2f}x realtime |")
+            status_parts.append(f"Speed: {speed_ratio:.2f}x realtime")
         
         status = " | ".join(status_parts)
         yield status, srt_content, srt_path
@@ -362,6 +413,12 @@ def create_interface() -> gr.Blocks:
                         label="Merge Short Subtitles",
                     )
                 
+                multi_gpu_checkbox = gr.Checkbox(
+                    value=True,
+                    label="🚀 Use Multi-GPU Parallel Processing (for audio > 5 min)",
+                    info="Automatically enables for long audio files",
+                )
+                
                 max_chars_slider = gr.Slider(
                     minimum=40,
                     maximum=120,
@@ -417,6 +474,7 @@ def create_interface() -> gr.Blocks:
                 use_vad_checkbox,
                 merge_checkbox,
                 max_chars_slider,
+                multi_gpu_checkbox,
             ],
             outputs=[status_text, srt_output, srt_file],
         )
