@@ -14,6 +14,7 @@ import soundfile as sf
 
 from transcriber import WhisperTranscriber
 from vad import SileroVAD
+from chinese_converter import convert_segments_to_traditional, get_converter
 
 # CRITICAL: Set multiprocessing start method to 'spawn' for CUDA compatibility
 try:
@@ -374,6 +375,16 @@ class ParallelWhisperTranscriber:
         
         # Sort by timestamp
         all_segments.sort(key=lambda x: x["start"])
+        
+        # Convert to Traditional Chinese if language is Chinese
+        if language == "zh":
+            converter = get_converter()
+            if converter.is_available():
+                print("🔄 Converting to Traditional Chinese...")
+                all_segments = convert_segments_to_traditional(all_segments)
+                print("✅ Converted to Traditional Chinese")
+            else:
+                print("⚠️  Chinese converter not available, skipping conversion")
         
         elapsed = time.time() - start_time
         speed_ratio = total_duration / elapsed if elapsed > 0 else 0
