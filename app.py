@@ -12,6 +12,7 @@ from typing import Optional, Tuple, Generator
 
 import gradio as gr
 import soundfile as sf
+import torch
 
 from transcriber import (
     WhisperTranscriber,
@@ -100,14 +101,16 @@ def get_transcriber(
     global transcriber
     
     if transcriber is None or transcriber.model_size != model_size:
-        # For single GPU mode, explicitly use only the first GPU (cuda:0)
+        # For single GPU mode, set GPU 0 as default device
         device = os.environ.get("WHISPER_DEVICE", "cuda")
-        if device == "cuda":
-            device = "cuda:0"  # Explicitly use GPU 0 only
+        
+        # Set PyTorch default GPU to 0 for single-GPU mode
+        if device == "cuda" and torch.cuda.is_available():
+            torch.cuda.set_device(0)  # Set GPU 0 as default
         
         transcriber = WhisperTranscriber(
             model_size=model_size,
-            device=device,
+            device=device,  # Use "cuda" not "cuda:0"
             compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "float16"),
             use_vad=use_vad,
         )
