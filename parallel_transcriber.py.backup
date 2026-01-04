@@ -1,6 +1,5 @@
 """
 Multi-GPU parallel transcription for efficient processing of long audio files.
-IMPROVED VERSION with better error handling and logging.
 """
 
 import os
@@ -25,7 +24,7 @@ def transcribe_segment_on_gpu(
     
     Args:
         args: Tuple of (segment_index, audio_segment, start_time, end_time, 
-                       gpu_id, model_size, language, task, compute_type)
+                       gpu_id, model_size, language, task)
     
     Returns:
         Dictionary with segment results
@@ -42,36 +41,14 @@ def transcribe_segment_on_gpu(
         compute_type,
     ) = args
     
-    temp_path = None
-    
     # Set this process to use specific GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     
     try:
-        # Validate audio data
-        if len(audio_data) == 0:
-            raise ValueError(f"Segment {segment_idx}: Empty audio data")
-        
-        duration = end_time - start_time
-        
-        # Skip very short segments (< 100ms)
-        if duration < 0.1:
-            print(f"[GPU {gpu_id}] ⊘ Segment {segment_idx} too short ({duration:.2f}s), skipping")
-            return {
-                "segment_idx": segment_idx,
-                "success": True,
-                "segments": [],
-                "gpu_id": gpu_id,
-                "duration": duration,
-                "skipped": True,
-            }
-        
         # Create temporary file for this segment
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
             temp_path = temp_file.name
             sf.write(temp_path, audio_data, 16000)
-        
-        print(f"[GPU {gpu_id}] ▶ Processing segment {segment_idx} ({duration:.1f}s)")
         
         # Initialize transcriber for this GPU
         transcriber = WhisperTranscriber(
@@ -98,37 +75,26 @@ def transcribe_segment_on_gpu(
                 "text": seg["text"],
             })
         
-        print(f"[GPU {gpu_id}] ✓ Segment {segment_idx} complete: {len(adjusted_segments)} text segments")
-        
         return {
             "segment_idx": segment_idx,
             "success": True,
             "segments": adjusted_segments,
             "gpu_id": gpu_id,
-            "duration": duration,
+            "duration": end_time - start_time,
         }
         
     except Exception as e:
-        import traceback
-        error_detail = traceback.format_exc()
-        print(f"[GPU {gpu_id}] ✗ ERROR in segment {segment_idx}: {str(e)}")
-        print(f"[GPU {gpu_id}] Traceback:\n{error_detail}")
-        
         return {
             "segment_idx": segment_idx,
             "success": False,
             "error": str(e),
-            "error_detail": error_detail,
             "gpu_id": gpu_id,
         }
     
     finally:
         # Cleanup temp file
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.unlink(temp_path)
-            except Exception as e:
-                print(f"[GPU {gpu_id}] ⚠ Could not delete temp file {temp_path}: {e}")
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 class ParallelWhisperTranscriber:
@@ -167,8 +133,8 @@ class ParallelWhisperTranscriber:
         audio_path: str,
         language: Optional[str] = None,
         task: str = "transcribe",
-        min_segment_duration: float = 15.0,  # Increased from 10s to 15s
-        max_segment_duration: float = 45.0,  # Decreased from 60s to 45s
+        min_segment_duration: float = 10.0,  # Minimum 10 seconds per segment
+        max_segment_duration: float = 60.0,  # Maximum 60 seconds per segment
         progress_callback: Optional[Callable] = None,
     ) -> List[Dict]:
         """
@@ -194,8 +160,6 @@ class ParallelWhisperTranscriber:
         audio, sample_rate = sf.read(audio_path, dtype="float32")
         total_duration = len(audio) / sample_rate
         
-        print(f"📊 Audio loaded: {total_duration:.1f}s ({len(audio)} samples @ {sample_rate}Hz)")
-        
         if progress_callback:
             progress_callback(5, f"Audio loaded: {total_duration:.1f}s")
         
@@ -206,12 +170,9 @@ class ParallelWhisperTranscriber:
         vad_segments = self.vad.detect_speech_segments(audio, return_seconds=True)
         
         if not vad_segments:
-            print("⚠ No speech detected in audio")
             if progress_callback:
                 progress_callback(100, "No speech detected")
             return []
-        
-        print(f"🎯 VAD detected {len(vad_segments)} speech segments")
         
         # Merge VAD segments to optimal size for parallel processing
         if progress_callback:
@@ -226,8 +187,6 @@ class ParallelWhisperTranscriber:
         )
         
         num_segments = len(optimized_segments)
-        print(f"✂️  Optimized to {num_segments} segments for {self.num_gpus} GPUs")
-        
         if progress_callback:
             progress_callback(
                 20,
@@ -251,15 +210,11 @@ class ParallelWhisperTranscriber:
             ))
         
         # Process segments in parallel using multiple GPUs
-        print(f"🚀 Starting parallel transcription on {self.num_gpus} GPUs...")
-        
         if progress_callback:
             progress_callback(25, f"Starting parallel transcription on {self.num_gpus} GPUs...")
         
         results = []
         completed = 0
-        skipped = 0
-        failed = 0
         
         with ProcessPoolExecutor(max_workers=self.num_gpus) as executor:
             # Submit all tasks
@@ -274,18 +229,12 @@ class ParallelWhisperTranscriber:
                 results.append(result)
                 completed += 1
                 
-                if not result["success"]:
-                    failed += 1
-                elif result.get("skipped"):
-                    skipped += 1
-                
                 if progress_callback:
                     progress_pct = 25 + (completed / num_segments) * 70
                     gpu_info = f"GPU {result.get('gpu_id', '?')}"
-                    status = "✓" if result["success"] else "✗"
                     progress_callback(
                         progress_pct,
-                        f"{status} ({completed}/{num_segments}) on {gpu_info}..."
+                        f"Processing ({completed}/{num_segments}) on {gpu_info}..."
                     )
         
         # Sort results by segment index and merge
@@ -302,28 +251,16 @@ class ParallelWhisperTranscriber:
             if result["success"]:
                 all_segments.extend(result["segments"])
             else:
-                failed_segments.append((result["segment_idx"], result.get("error", "Unknown")))
+                failed_segments.append(result["segment_idx"])
         
-        # Report statistics
         if failed_segments:
-            print(f"⚠️  {len(failed_segments)} segments failed to transcribe:")
-            for idx, error in failed_segments[:5]:  # Show first 5 errors
-                print(f"   - Segment {idx}: {error}")
-            if len(failed_segments) > 5:
-                print(f"   ... and {len(failed_segments) - 5} more")
-        
-        if skipped > 0:
-            print(f"⊘ {skipped} segments skipped (too short)")
+            print(f"Warning: {len(failed_segments)} segments failed to transcribe")
         
         # Sort by timestamp
         all_segments.sort(key=lambda x: x["start"])
         
         elapsed = time.time() - start_time
         speed_ratio = total_duration / elapsed if elapsed > 0 else 0
-        
-        print(f"✅ Complete! {len(all_segments)} text segments | "
-              f"Speed: {speed_ratio:.1f}x realtime | "
-              f"Time: {elapsed:.1f}s")
         
         if progress_callback:
             progress_callback(
@@ -357,10 +294,6 @@ class ParallelWhisperTranscriber:
         
         for seg in vad_segments:
             duration = seg["end"] - seg["start"]
-            
-            # Skip segments that are too short
-            if duration < 0.5:  # Less than 500ms
-                continue
             
             if current is None:
                 current = seg.copy()
