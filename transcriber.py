@@ -53,6 +53,7 @@ class WhisperTranscriber:
         compute_type: str = "float16",
         use_vad: bool = True,
         vad_threshold: float = 0.5,
+        min_silence_duration_ms: int = 100,
     ):
         """
         Initialize transcriber.
@@ -63,6 +64,7 @@ class WhisperTranscriber:
             compute_type: Compute type (float16/int8/float32)
             use_vad: Whether to use VAD for segmentation
             vad_threshold: VAD speech detection threshold
+            min_silence_duration_ms: Minimum silence duration in ms to split segments
         """
         self.model_size = model_size
         self.device = device
@@ -93,8 +95,11 @@ class WhisperTranscriber:
         # Load VAD if enabled
         self.vad = None
         if use_vad:
-            print("Loading Silero VAD...")
-            self.vad = SileroVAD(threshold=vad_threshold)
+            print(f"Loading Silero VAD (min_silence_duration={min_silence_duration_ms}ms)...")
+            self.vad = SileroVAD(
+                threshold=vad_threshold,
+                min_silence_duration_ms=min_silence_duration_ms,
+            )
             print("✅ VAD loaded successfully")
 
     def load_audio(self, file_path: str, sample_rate: int = 16000) -> np.ndarray:
