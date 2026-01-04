@@ -30,8 +30,8 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    # Enable shared memory for PyTorch
-    shm_size: '8gb'
+    # Enable shared memory for PyTorch (increased for multi-GPU parallel processing)
+    shm_size: '16gb'
 
 volumes:
   whisper-models:

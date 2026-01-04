@@ -4,6 +4,24 @@
 
 ## 📖 文件列表
 
+### 🚀 [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)
+**部署與測試指南** - Docker 部署、驗證和故障排除
+
+**適合對象**: 系統管理員、部署人員
+
+**內容包含**:
+- ✅ Docker 整合狀態確認
+- 🚀 完整部署步驟
+- 🔍 多 GPU 功能驗證方法
+- 📊 GPU 使用監控
+- 🧪 完整測試流程
+- 🐛 故障排除指南
+- ✅ 驗證清單
+
+**何時閱讀**: 部署前必讀，確保多 GPU 功能正常運作
+
+---
+
 ### 🚀 [QUICKSTART_MULTI_GPU.md](./QUICKSTART_MULTI_GPU.md)
 **快速開始指南** - 5 分鐘快速部署多 GPU 並行處理
 
