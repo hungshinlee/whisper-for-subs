@@ -1,12 +1,11 @@
 """
 Multi-GPU parallel transcription for efficient processing of long audio files.
-IMPROVED VERSION with better error handling, logging, and CUDA multiprocessing support.
+IMPROVED VERSION with better error handling and logging.
 """
 
 import os
 import time
 import tempfile
-import multiprocessing
 from typing import List, Dict, Optional, Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
@@ -14,14 +13,6 @@ import soundfile as sf
 
 from transcriber import WhisperTranscriber
 from vad import SileroVAD
-
-# CRITICAL: Set multiprocessing start method to 'spawn' for CUDA compatibility
-# This must be done before any other multiprocessing code
-try:
-    multiprocessing.set_start_method('spawn', force=True)
-except RuntimeError:
-    # Already set, ignore
-    pass
 
 
 def transcribe_segment_on_gpu(
@@ -53,7 +44,7 @@ def transcribe_segment_on_gpu(
     
     temp_path = None
     
-    # IMPORTANT: Set GPU before any CUDA operations
+    # Set this process to use specific GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     
     try:
@@ -83,7 +74,6 @@ def transcribe_segment_on_gpu(
         print(f"[GPU {gpu_id}] ▶ Processing segment {segment_idx} ({duration:.1f}s)")
         
         # Initialize transcriber for this GPU
-        # Note: device_index is automatically set to 0 because CUDA_VISIBLE_DEVICES makes this GPU appear as device 0
         transcriber = WhisperTranscriber(
             model_size=model_size,
             device="cuda",
@@ -168,7 +158,6 @@ class ParallelWhisperTranscriber:
         self.num_gpus = len(self.gpu_ids)
         
         print(f"Initialized ParallelWhisperTranscriber with {self.num_gpus} GPUs: {self.gpu_ids}")
-        print(f"Using multiprocessing start method: {multiprocessing.get_start_method()}")
         
         # Initialize VAD (runs on CPU, shared across all processes)
         self.vad = SileroVAD(threshold=vad_threshold)
@@ -272,10 +261,7 @@ class ParallelWhisperTranscriber:
         skipped = 0
         failed = 0
         
-        # Use spawn method for ProcessPoolExecutor (CUDA compatible)
-        mp_context = multiprocessing.get_context('spawn')
-        
-        with ProcessPoolExecutor(max_workers=self.num_gpus, mp_context=mp_context) as executor:
+        with ProcessPoolExecutor(max_workers=self.num_gpus) as executor:
             # Submit all tasks
             future_to_segment = {
                 executor.submit(transcribe_segment_on_gpu, task): task[0]
