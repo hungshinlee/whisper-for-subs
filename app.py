@@ -30,6 +30,7 @@ from youtube_downloader import (
     get_video_info,
 )
 from srt_utils import segments_to_srt, merge_segments
+from chinese_converter import convert_segments_to_traditional, get_converter
 
 
 # Custom CSS with Roboto font
@@ -54,6 +55,16 @@ textarea, input, button, select {
 
 .progress-bar-container {
     margin: 10px 0;
+}
+
+.copy-button {
+    margin-top: 10px;
+}
+
+.copy-success {
+    color: #4CAF50;
+    font-weight: 500;
+    margin-top: 5px;
 }
 """
 
@@ -273,6 +284,16 @@ def process_audio(
             yield "⚠️ No speech detected", "", None
             return
         
+        # Convert to Traditional Chinese if language is Chinese
+        if language == "zh":
+            converter = get_converter()
+            if converter.is_available():
+                yield format_progress_html(87, "Converting to Traditional Chinese..."), "", None
+                segments = convert_segments_to_traditional(segments)
+                print("✅ Converted to Traditional Chinese")
+            else:
+                print("⚠️  Chinese converter not available, skipping conversion")
+        
         # Merge segments if requested
         if merge_subtitles:
             yield format_progress_html(90, "Merging subtitle segments..."), "", None
@@ -454,6 +475,13 @@ def create_interface() -> gr.Blocks:
                     max_lines=30,
                 )
                 
+                with gr.Row():
+                    copy_btn = gr.Button(
+                        "📋 Copy to Clipboard",
+                        elem_classes="copy-button",
+                    )
+                    copy_status = gr.HTML("", elem_classes="copy-success")
+                
                 srt_file = gr.File(
                     label="Download SRT File",
                 )
@@ -505,6 +533,28 @@ def create_interface() -> gr.Blocks:
             fn=lambda x: gr.update(visible=x),
             inputs=[merge_checkbox],
             outputs=[max_chars_slider],
+        )
+        
+        # Copy to clipboard functionality
+        copy_btn.click(
+            fn=None,
+            inputs=[srt_output],
+            outputs=[copy_status],
+            js="""(srt_content) => {
+                if (!srt_content) {
+                    return "⚠️ No content to copy";
+                }
+                navigator.clipboard.writeText(srt_content).then(
+                    () => {
+                        return "✅ Copied to clipboard!";
+                    },
+                    (err) => {
+                        return "❌ Failed to copy: " + err;
+                    }
+                );
+                // Return immediately for UI feedback
+                return "✅ Copied to clipboard!";
+            }"""
         )
     
     return app
