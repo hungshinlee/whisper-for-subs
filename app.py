@@ -107,9 +107,13 @@ def cleanup_old_files(max_age_hours: int = 24):
 def get_transcriber(
     model_size: str = "large-v3",
     use_vad: bool = True,
+    min_silence_duration_s: float = 0.1,
 ) -> WhisperTranscriber:
     """Get or create single-GPU transcriber instance (uses only GPU 0)."""
     global transcriber
+    
+    # Convert seconds to milliseconds
+    min_silence_duration_ms = int(min_silence_duration_s * 1000)
     
     if transcriber is None or transcriber.model_size != model_size:
         # For single GPU mode, set GPU 0 as default device
@@ -124,6 +128,7 @@ def get_transcriber(
             device=device,  # Use "cuda" not "cuda:0"
             compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "float16"),
             use_vad=use_vad,
+            min_silence_duration_ms=min_silence_duration_ms,
         )
     
     return transcriber
@@ -131,9 +136,13 @@ def get_transcriber(
 
 def get_parallel_transcriber(
     model_size: str = "large-v3",
+    min_silence_duration_s: float = 0.1,
 ) -> ParallelWhisperTranscriber:
     """Get or create multi-GPU transcriber instance."""
     global parallel_transcriber
+    
+    # Convert seconds to milliseconds
+    min_silence_duration_ms = int(min_silence_duration_s * 1000)
     
     if parallel_transcriber is None or parallel_transcriber.model_size != model_size:
         # Parse GPU IDs from environment
@@ -144,6 +153,7 @@ def get_parallel_transcriber(
             model_size=model_size,
             compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "float16"),
             gpu_ids=gpu_ids,
+            min_silence_duration_ms=min_silence_duration_ms,
         )
     
     return parallel_transcriber
@@ -169,6 +179,7 @@ def process_audio(
     language: str,
     task: str,
     use_vad: bool,
+    min_silence_duration_s: float,
     merge_subtitles: bool,
     max_chars: int,
     use_multi_gpu: bool,
@@ -242,7 +253,7 @@ def process_audio(
         if use_parallel:
             # Multi-GPU parallel processing
             yield format_progress_html(35, "Loading models on multiple GPUs..."), "", None
-            para_trans = get_parallel_transcriber(model_size)
+            para_trans = get_parallel_transcriber(model_size, min_silence_duration_s)
             num_gpus_used = para_trans.num_gpus
             
             yield format_progress_html(40, f"Starting parallel transcription on {num_gpus_used} GPUs..."), "", None
@@ -259,7 +270,7 @@ def process_audio(
         else:
             # Single GPU processing (uses only GPU 0)
             yield format_progress_html(35, "Loading Whisper model on GPU 0..."), "", None
-            trans = get_transcriber(model_size, use_vad)
+            trans = get_transcriber(model_size, use_vad, min_silence_duration_s)
             
             yield format_progress_html(40, "Model loaded on GPU 0. Starting transcription..."), "", None
             
@@ -442,6 +453,16 @@ def create_interface() -> gr.Blocks:
                         label="Merge Short Subtitles",
                     )
                 
+                min_silence_slider = gr.Slider(
+                    minimum=0.01,
+                    maximum=2.0,
+                    value=0.1,
+                    step=0.01,
+                    label="VAD: Min Silence Duration (seconds)",
+                    info="Minimum silence duration to split segments (default: 0.1s)",
+                    visible=True,
+                )
+                
                 multi_gpu_checkbox = gr.Checkbox(
                     value=True,
                     label="🚀 Use Multi-GPU Parallel Processing (for audio > 5 min)",
@@ -508,6 +529,7 @@ def create_interface() -> gr.Blocks:
                 language_dropdown,
                 task_radio,
                 use_vad_checkbox,
+                min_silence_slider,
                 merge_checkbox,
                 max_chars_slider,
                 multi_gpu_checkbox,
@@ -533,6 +555,13 @@ def create_interface() -> gr.Blocks:
             fn=lambda x: gr.update(visible=x),
             inputs=[merge_checkbox],
             outputs=[max_chars_slider],
+        )
+        
+        # Toggle min_silence visibility based on VAD checkbox
+        use_vad_checkbox.change(
+            fn=lambda x: gr.update(visible=x),
+            inputs=[use_vad_checkbox],
+            outputs=[min_silence_slider],
         )
         
         # Copy to clipboard functionality

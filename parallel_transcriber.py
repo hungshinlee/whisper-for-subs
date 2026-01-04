@@ -167,6 +167,7 @@ class ParallelWhisperTranscriber:
         compute_type: str = "float16",
         gpu_ids: List[int] = None,
         vad_threshold: float = 0.5,
+        min_silence_duration_ms: int = 100,
     ):
         """
         Initialize parallel transcriber.
@@ -176,6 +177,7 @@ class ParallelWhisperTranscriber:
             compute_type: Compute type (float16/int8/float32)
             gpu_ids: List of GPU IDs to use (e.g., [0, 1, 2, 3])
             vad_threshold: VAD detection threshold
+            min_silence_duration_ms: Minimum silence duration in ms to split segments
         """
         self.model_size = model_size
         self.compute_type = compute_type
@@ -187,7 +189,11 @@ class ParallelWhisperTranscriber:
         print(f"💡 Using persistent workers (models loaded once per GPU)")
         
         # Initialize VAD (runs on CPU, shared across all processes)
-        self.vad = SileroVAD(threshold=vad_threshold)
+        print(f"Loading Silero VAD (min_silence_duration={min_silence_duration_ms}ms)...")
+        self.vad = SileroVAD(
+            threshold=vad_threshold,
+            min_silence_duration_ms=min_silence_duration_ms,
+        )
     
     def transcribe_parallel(
         self,
