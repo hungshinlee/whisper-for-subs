@@ -1,6 +1,6 @@
 """
 Multi-GPU parallel transcription for efficient processing of long audio files.
-OPTIMIZED VERSION with persistent worker processes and model caching.
+IMPROVED VERSION with better error handling, logging, and CUDA multiprocessing support.
 """
 
 import os
@@ -16,68 +16,45 @@ from transcriber import WhisperTranscriber
 from vad import SileroVAD
 
 # CRITICAL: Set multiprocessing start method to 'spawn' for CUDA compatibility
+# This must be done before any other multiprocessing code
 try:
     multiprocessing.set_start_method('spawn', force=True)
 except RuntimeError:
+    # Already set, ignore
     pass
 
-# Global variable to store transcriber instance in each worker process
-_worker_transcriber = None
-_worker_gpu_id = None
 
-
-def _init_worker(gpu_id: int, model_size: str, compute_type: str):
+def transcribe_segment_on_gpu(
+    args: tuple,
+) -> Dict:
     """
-    Initialize worker process with a persistent transcriber instance.
-    This function is called once when each worker process starts.
+    Transcribe a single audio segment on a specific GPU.
+    
+    This function runs in a separate process with its own GPU assignment.
     
     Args:
-        gpu_id: GPU ID for this worker
-        model_size: Whisper model size
-        compute_type: Compute type (float16/int8/float32)
-    """
-    global _worker_transcriber, _worker_gpu_id
-    
-    # Set GPU for this worker
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    _worker_gpu_id = gpu_id
-    
-    # Initialize transcriber once per worker
-    print(f"[GPU {gpu_id}] 🔧 Initializing worker with model {model_size}...")
-    _worker_transcriber = WhisperTranscriber(
-        model_size=model_size,
-        device="cuda",
-        compute_type=compute_type,
-        use_vad=False,  # VAD already done
-    )
-    print(f"[GPU {gpu_id}] ✅ Worker initialized and ready")
-
-
-def transcribe_segment_on_gpu(args: tuple) -> Dict:
-    """
-    Transcribe a single audio segment using the pre-loaded model.
-    
-    This function reuses the transcriber instance created in _init_worker.
-    
-    Args:
-        args: Tuple of (segment_index, audio_segment, start_time, end_time, language, task)
+        args: Tuple of (segment_index, audio_segment, start_time, end_time, 
+                       gpu_id, model_size, language, task, compute_type)
     
     Returns:
         Dictionary with segment results
     """
-    global _worker_transcriber, _worker_gpu_id
-    
     (
         segment_idx,
         audio_data,
         start_time,
         end_time,
+        gpu_id,
+        model_size,
         language,
         task,
+        compute_type,
     ) = args
     
     temp_path = None
-    gpu_id = _worker_gpu_id
+    
+    # IMPORTANT: Set GPU before any CUDA operations
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     
     try:
         # Validate audio data
@@ -105,8 +82,17 @@ def transcribe_segment_on_gpu(args: tuple) -> Dict:
         
         print(f"[GPU {gpu_id}] ▶ Processing segment {segment_idx} ({duration:.1f}s)")
         
-        # Use the pre-loaded transcriber (no model loading overhead!)
-        segments = _worker_transcriber.transcribe(
+        # Initialize transcriber for this GPU
+        # Note: device_index is automatically set to 0 because CUDA_VISIBLE_DEVICES makes this GPU appear as device 0
+        transcriber = WhisperTranscriber(
+            model_size=model_size,
+            device="cuda",
+            compute_type=compute_type,
+            use_vad=False,  # VAD already done
+        )
+        
+        # Transcribe segment
+        segments = transcriber.transcribe(
             temp_path,
             language=language,
             task=task,
@@ -157,7 +143,7 @@ def transcribe_segment_on_gpu(args: tuple) -> Dict:
 
 class ParallelWhisperTranscriber:
     """
-    Multi-GPU parallel Whisper transcriber with persistent worker processes.
+    Multi-GPU parallel Whisper transcriber for efficient processing.
     """
     
     def __init__(
@@ -183,7 +169,6 @@ class ParallelWhisperTranscriber:
         
         print(f"Initialized ParallelWhisperTranscriber with {self.num_gpus} GPUs: {self.gpu_ids}")
         print(f"Using multiprocessing start method: {multiprocessing.get_start_method()}")
-        print(f"💡 Using persistent workers (models loaded once per GPU)")
         
         # Initialize VAD (runs on CPU, shared across all processes)
         self.vad = SileroVAD(threshold=vad_threshold)
@@ -193,8 +178,8 @@ class ParallelWhisperTranscriber:
         audio_path: str,
         language: Optional[str] = None,
         task: str = "transcribe",
-        min_segment_duration: float = 15.0,
-        max_segment_duration: float = 45.0,
+        min_segment_duration: float = 15.0,  # Increased from 10s to 15s
+        max_segment_duration: float = 45.0,  # Decreased from 60s to 45s
         progress_callback: Optional[Callable] = None,
     ) -> List[Dict]:
         """
@@ -261,64 +246,41 @@ class ParallelWhisperTranscriber:
             )
         
         # Prepare tasks for parallel processing
-        # Note: Simplified args since GPU assignment is handled by worker initialization
         tasks = []
         for idx, (start, end, audio_segment) in enumerate(optimized_segments):
+            gpu_id = self.gpu_ids[idx % self.num_gpus]  # Round-robin GPU assignment
             tasks.append((
                 idx,
                 audio_segment,
                 start,
                 end,
+                gpu_id,
+                self.model_size,
                 language,
                 task,
+                self.compute_type,
             ))
         
-        # Process segments in parallel using persistent workers
-        print(f"🚀 Starting parallel transcription with {self.num_gpus} persistent workers...")
+        # Process segments in parallel using multiple GPUs
+        print(f"🚀 Starting parallel transcription on {self.num_gpus} GPUs...")
         
         if progress_callback:
-            progress_callback(25, f"Initializing {self.num_gpus} GPU workers...")
+            progress_callback(25, f"Starting parallel transcription on {self.num_gpus} GPUs...")
         
         results = []
         completed = 0
         skipped = 0
         failed = 0
         
-        # Create executor with worker initialization
+        # Use spawn method for ProcessPoolExecutor (CUDA compatible)
         mp_context = multiprocessing.get_context('spawn')
         
-        # Create init args for each worker (one worker per GPU)
-        # Worker i will use GPU self.gpu_ids[i]
-        with ProcessPoolExecutor(
-            max_workers=self.num_gpus,
-            mp_context=mp_context,
-            initializer=_init_worker,
-            initargs=(self.gpu_ids[0], self.model_size, self.compute_type),  # Will be overridden
-        ) as executor:
-            
-            # We need to manually create workers with different GPU IDs
-            # This is a workaround for ProcessPoolExecutor's limitation
-            # Instead, we'll use a different approach: create separate executors
-            pass
-        
-        # Better approach: Create separate executor for each GPU
-        executors = []
-        for gpu_id in self.gpu_ids:
-            executor = ProcessPoolExecutor(
-                max_workers=1,
-                mp_context=mp_context,
-                initializer=_init_worker,
-                initargs=(gpu_id, self.model_size, self.compute_type),
-            )
-            executors.append(executor)
-        
-        try:
-            # Submit tasks round-robin to each executor
-            future_to_segment = {}
-            for idx, task in enumerate(tasks):
-                executor_idx = idx % self.num_gpus
-                future = executors[executor_idx].submit(transcribe_segment_on_gpu, task)
-                future_to_segment[future] = task[0]  # segment_idx
+        with ProcessPoolExecutor(max_workers=self.num_gpus, mp_context=mp_context) as executor:
+            # Submit all tasks
+            future_to_segment = {
+                executor.submit(transcribe_segment_on_gpu, task): task[0]
+                for task in tasks
+            }
             
             # Collect results as they complete
             for future in as_completed(future_to_segment):
@@ -340,11 +302,6 @@ class ParallelWhisperTranscriber:
                         f"{status} ({completed}/{num_segments}) on {gpu_info}..."
                     )
         
-        finally:
-            # Shutdown all executors
-            for executor in executors:
-                executor.shutdown(wait=True)
-        
         # Sort results by segment index and merge
         if progress_callback:
             progress_callback(95, "Merging results...")
@@ -364,7 +321,7 @@ class ParallelWhisperTranscriber:
         # Report statistics
         if failed_segments:
             print(f"⚠️  {len(failed_segments)} segments failed to transcribe:")
-            for idx, error in failed_segments[:5]:
+            for idx, error in failed_segments[:5]:  # Show first 5 errors
                 print(f"   - Segment {idx}: {error}")
             if len(failed_segments) > 5:
                 print(f"   ... and {len(failed_segments) - 5} more")
