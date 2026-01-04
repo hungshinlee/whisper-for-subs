@@ -75,6 +75,12 @@ class WhisperTranscriber:
             self.device = "cpu"
             self.compute_type = "float32"
 
+        # Determine GPU index for logging
+        self.gpu_index = None
+        if self.device == "cuda" and torch.cuda.is_available():
+            self.gpu_index = torch.cuda.current_device()
+            print(f"🎯 Single-GPU mode: Using GPU {self.gpu_index}")
+
         # Load Whisper model
         print(f"Loading Whisper model: {model_size} on {self.device}")
         self.model = WhisperModel(
@@ -82,12 +88,14 @@ class WhisperTranscriber:
             device=self.device,
             compute_type=self.compute_type,
         )
+        print(f"✅ Model loaded successfully")
 
         # Load VAD if enabled
         self.vad = None
         if use_vad:
             print("Loading Silero VAD...")
             self.vad = SileroVAD(threshold=vad_threshold)
+            print("✅ VAD loaded successfully")
 
     def load_audio(self, file_path: str, sample_rate: int = 16000) -> np.ndarray:
         """
@@ -151,12 +159,17 @@ class WhisperTranscriber:
         Returns:
             List of segments with start, end, text
         """
+        import time
+        start_time = time.time()
+        
         if progress_callback:
             progress_callback(0, "Loading audio...")
 
         # Load audio
         audio = self.load_audio(audio_path)
         duration = len(audio) / 16000  # seconds
+        
+        print(f"📊 Audio loaded: {duration:.1f}s ({len(audio)} samples @ 16000Hz)")
 
         if progress_callback:
             progress_callback(5, f"Audio duration: {duration:.1f} seconds")
@@ -165,7 +178,7 @@ class WhisperTranscriber:
         if self.use_vad and self.vad is not None:
             if progress_callback:
                 progress_callback(10, "Detecting speech segments with VAD...")
-            return self._transcribe_with_vad(
+            segments = self._transcribe_with_vad(
                 audio,
                 duration,
                 language,
@@ -175,7 +188,7 @@ class WhisperTranscriber:
                 progress_callback,
             )
         else:
-            return self._transcribe_direct(
+            segments = self._transcribe_direct(
                 audio_path,
                 language,
                 task,
@@ -183,6 +196,20 @@ class WhisperTranscriber:
                 word_timestamps,
                 progress_callback,
             )
+        
+        # Print summary
+        elapsed = time.time() - start_time
+        speed_ratio = duration / elapsed if elapsed > 0 else 0
+        gpu_info = f"GPU {self.gpu_index}" if self.gpu_index is not None else "CPU"
+        
+        print(f"✅ Transcription complete!")
+        print(f"   Device: {gpu_info}")
+        print(f"   Segments: {len(segments)}")
+        print(f"   Duration: {duration:.1f}s")
+        print(f"   Time: {elapsed:.1f}s")
+        print(f"   Speed: {speed_ratio:.1f}x realtime")
+        
+        return segments
 
     def _transcribe_with_vad(
         self,
@@ -204,16 +231,23 @@ class WhisperTranscriber:
         )
 
         if not chunks:
+            print("⚠ No speech detected in audio")
             if progress_callback:
                 progress_callback(100, "No speech detected")
             return []
+        
+        print(f"🎯 VAD detected {len(chunks)} speech segments")
 
         if progress_callback:
             progress_callback(15, f"Detected {len(chunks)} speech segments")
 
         segments = []
+        gpu_label = f"GPU {self.gpu_index}" if self.gpu_index is not None else "CPU"
         
         for i, (start_time, end_time, chunk_audio) in enumerate(chunks):
+            chunk_duration = end_time - start_time
+            print(f"[{gpu_label}] ▶ Processing chunk {i+1}/{len(chunks)} ({chunk_duration:.1f}s)")
+            
             # Update progress
             progress = 15 + (i / len(chunks)) * 80
             if progress_callback:
@@ -241,12 +275,16 @@ class WhisperTranscriber:
                 )
 
                 # Collect segments with adjusted timestamps
+                chunk_segments = []
                 for seg in result:
-                    segments.append({
+                    chunk_segments.append({
                         "start": start_time + seg.start,
                         "end": start_time + seg.end,
                         "text": seg.text,
                     })
+                    segments.append(chunk_segments[-1])
+                
+                print(f"[{gpu_label}] ✓ Chunk {i+1} complete: {len(chunk_segments)} text segments")
 
             finally:
                 if os.path.exists(temp_chunk.name):
