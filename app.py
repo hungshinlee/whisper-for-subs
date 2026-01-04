@@ -96,13 +96,18 @@ def get_transcriber(
     model_size: str = "large-v3",
     use_vad: bool = True,
 ) -> WhisperTranscriber:
-    """Get or create single-GPU transcriber instance."""
+    """Get or create single-GPU transcriber instance (uses only GPU 0)."""
     global transcriber
     
     if transcriber is None or transcriber.model_size != model_size:
+        # For single GPU mode, explicitly use only the first GPU (cuda:0)
+        device = os.environ.get("WHISPER_DEVICE", "cuda")
+        if device == "cuda":
+            device = "cuda:0"  # Explicitly use GPU 0 only
+        
         transcriber = WhisperTranscriber(
             model_size=model_size,
-            device=os.environ.get("WHISPER_DEVICE", "cuda"),
+            device=device,
             compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "float16"),
             use_vad=use_vad,
         )
@@ -238,11 +243,11 @@ def process_audio(
                 progress_callback=transcribe_progress,
             )
         else:
-            # Single GPU processing
-            yield format_progress_html(35, "Loading Whisper model..."), "", None
+            # Single GPU processing (uses only GPU 0)
+            yield format_progress_html(35, "Loading Whisper model on GPU 0..."), "", None
             trans = get_transcriber(model_size, use_vad)
             
-            yield format_progress_html(40, "Model loaded. Starting transcription..."), "", None
+            yield format_progress_html(40, "Model loaded on GPU 0. Starting transcription..."), "", None
             
             # Transcribe with progress updates
             last_progress = [40]  # Use list to allow modification in nested function
@@ -291,7 +296,7 @@ def process_audio(
         processing_time = time.time() - start_time
         
         # Format status message with duration and processing time
-        gpu_info = f"{num_gpus_used} GPUs" if use_parallel else "1 GPU"
+        gpu_info = f"{num_gpus_used} GPUs" if use_parallel else "GPU 0 (single)"
         status_parts = [f"✅ Transcription complete! {len(segments)} subtitle segments generated.\n"]
         
         status_parts.append(f"Mode: {gpu_info}")
