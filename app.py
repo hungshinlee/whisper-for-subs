@@ -607,13 +607,17 @@ def main():
     
     # Enable queue for handling multiple users
     # Note: Transcription is sequential due to GPU memory constraints
-    app.queue(max_size=10)
+    app.queue(
+        max_size=10,
+        default_concurrency_limit=2,  # Allow 2 concurrent uploads
+    )
     
     app.launch(
         server_name=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
         server_port=int(os.environ.get("GRADIO_SERVER_PORT", 7860)),
         share=False,
         show_error=True,
+        max_file_size="500mb",  # Increase max file size to 500MB
     )
 
 
