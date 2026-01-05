@@ -856,4 +856,14 @@ MIT License - 詳見 [LICENSE](LICENSE) 文件
 
 ---
 
-**Built with ❤️ by the Whisper ASR Team**
+## 授權
+
+MIT License
+
+---
+
+## 作者
+
+**李鴻欣 (Hung-Shin Lee)**  
+聯和科創（United Link Co., Ltd.）  
+hungshinlee@gmail.com
