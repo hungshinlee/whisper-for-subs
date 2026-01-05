@@ -225,6 +225,12 @@ class ParallelWhisperTranscriber:
         
         # Load audio
         audio, sample_rate = sf.read(audio_path, dtype="float32")
+        
+        # Convert stereo to mono if needed
+        if audio.ndim == 2:
+            print(f"🔄 Converting stereo audio to mono ({audio.shape[1]} channels)")
+            audio = audio.mean(axis=1)  # Average channels
+        
         total_duration = len(audio) / sample_rate
         
         print(f"📊 Audio loaded: {total_duration:.1f}s ({len(audio)} samples @ {sample_rate}Hz)")

@@ -72,9 +72,14 @@ class SileroVAD:
         else:
             audio_tensor = audio.float()
 
-        # Ensure 1D
+        # Ensure 1D (convert stereo to mono if needed)
         if audio_tensor.dim() > 1:
-            audio_tensor = audio_tensor.squeeze()
+            if audio_tensor.shape[1] > 1:
+                # Multiple channels - average them to mono
+                audio_tensor = audio_tensor.mean(dim=1)
+            else:
+                # Single channel - just squeeze
+                audio_tensor = audio_tensor.squeeze()
 
         # Get speech timestamps
         speech_timestamps = self.get_speech_timestamps(
