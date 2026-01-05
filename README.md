@@ -8,8 +8,6 @@
 
 使用 OpenAI Whisper 模型的專業級自動語音辨識 (ASR) 服務，可將音檔、影片或 YouTube 影片轉換為高品質 SRT 字幕檔。
 
-**Source:** [王新民](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html) 教授（中央研究院資訊科學研究所）
-
 ---
 
 ## ✨ 功能特色
