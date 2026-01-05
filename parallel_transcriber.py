@@ -61,7 +61,7 @@ def transcribe_segment_on_gpu(args: tuple) -> Dict:
     This function reuses the transcriber instance created in _init_worker.
     
     Args:
-        args: Tuple of (segment_index, audio_segment, start_time, end_time, language, task)
+        args: Tuple of (segment_index, audio_segment, start_time, end_time, language, task, initial_prompt)
     
     Returns:
         Dictionary with segment results
@@ -75,6 +75,7 @@ def transcribe_segment_on_gpu(args: tuple) -> Dict:
         end_time,
         language,
         task,
+        initial_prompt,
     ) = args
     
     temp_path = None
@@ -111,6 +112,7 @@ def transcribe_segment_on_gpu(args: tuple) -> Dict:
             temp_path,
             language=language,
             task=task,
+            initial_prompt=initial_prompt,
             progress_callback=None,
         )
         
@@ -200,6 +202,7 @@ class ParallelWhisperTranscriber:
         audio_path: str,
         language: Optional[str] = None,
         task: str = "transcribe",
+        initial_prompt: Optional[str] = None,
         min_segment_duration: float = 15.0,
         max_segment_duration: float = 45.0,
         progress_callback: Optional[Callable] = None,
@@ -211,6 +214,7 @@ class ParallelWhisperTranscriber:
             audio_path: Path to audio file
             language: Source language code
             task: "transcribe" or "translate"
+            initial_prompt: Initial prompt to guide transcription
             min_segment_duration: Minimum duration for each segment
             max_segment_duration: Maximum duration for each segment
             progress_callback: Callback function(progress, message)
@@ -295,6 +299,7 @@ class ParallelWhisperTranscriber:
                 end,
                 language,
                 task,
+                initial_prompt,
             ))
         
         # Process segments in parallel using persistent workers
