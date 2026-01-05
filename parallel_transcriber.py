@@ -231,6 +231,17 @@ class ParallelWhisperTranscriber:
             print(f"🔄 Converting stereo audio to mono ({audio.shape[1]} channels)")
             audio = audio.mean(axis=1)  # Average channels
         
+        # Resample to 16000 Hz if needed (VAD and Whisper require 16kHz)
+        target_sr = 16000
+        if sample_rate != target_sr:
+            print(f"🔄 Resampling audio from {sample_rate}Hz to {target_sr}Hz...")
+            # Use scipy for high-quality resampling
+            from scipy import signal
+            num_samples = int(len(audio) * target_sr / sample_rate)
+            audio = signal.resample(audio, num_samples)
+            sample_rate = target_sr
+            print(f"✅ Resampled to {target_sr}Hz")
+        
         total_duration = len(audio) / sample_rate
         
         print(f"📊 Audio loaded: {total_duration:.1f}s ({len(audio)} samples @ {sample_rate}Hz)")
