@@ -818,8 +818,8 @@ MIT License - 詳見 [LICENSE](LICENSE) 文件
 - [FFmpeg](https://ffmpeg.org/) - 音訊處理
 
 ### 特別感謝
-- [王新民](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html) 教授 - 專案發起人
-- 中央研究院資訊科學研究所 - 技術支援
+- [王新民](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html) 教授 - 提供硬體支援
+- [陳力瑋](https://github.com/txya900619) - 提供技術支援
 
 ---
 
@@ -853,12 +853,6 @@ MIT License - 詳見 [LICENSE](LICENSE) 文件
 - 即時狀態反饋
 - 動態顯示/隱藏選項
 - 更直觀的參數設定
-
----
-
-## 授權
-
-MIT License
 
 ---
 
