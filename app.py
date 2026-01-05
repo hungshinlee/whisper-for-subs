@@ -159,6 +159,57 @@ def get_parallel_transcriber(
     return parallel_transcriber
 
 
+def load_vocabulary(vocab_file: Optional[str], max_words: int = 30) -> Tuple[Optional[str], str]:
+    """
+    Load vocabulary file and create initial prompt.
+    
+    Args:
+        vocab_file: Path to vocabulary.txt file
+        max_words: Maximum number of words to include (default: 30)
+    
+    Returns:
+        Tuple of (initial_prompt, status_message)
+    """
+    if not vocab_file or not os.path.exists(vocab_file):
+        return None, ""
+    
+    try:
+        with open(vocab_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        # Extract valid words (non-empty, non-comment lines)
+        words = []
+        for line in lines:
+            line = line.strip()
+            # Skip empty lines and comments
+            if not line or line.startswith('#'):
+                continue
+            # Take only the first word if line contains multiple fields
+            word = line.split('|')[0].strip()
+            if word:
+                words.append(word)
+        
+        if not words:
+            return None, "⚠️ Vocabulary file is empty"
+        
+        # Take first max_words
+        selected_words = words[:max_words]
+        
+        # Create initial prompt
+        initial_prompt = f"重要詞彙：{', '.join(selected_words)}"
+        
+        status_msg = f"✅ Loaded {len(selected_words)} words from vocabulary (total: {len(words)} words)"
+        print(f"📚 {status_msg}")
+        print(f"📝 Initial prompt: {initial_prompt[:100]}...")
+        
+        return initial_prompt, status_msg
+        
+    except Exception as e:
+        error_msg = f"❌ Error loading vocabulary: {str(e)}"
+        print(error_msg)
+        return None, error_msg
+
+
 def format_progress_html(percent: int, message: str) -> str:
     """Generate HTML for progress bar."""
     return f"""
@@ -183,6 +234,7 @@ def process_audio(
     merge_subtitles: bool,
     max_chars: int,
     use_multi_gpu: bool,
+    vocabulary_file: Optional[str] = None,
 ) -> Generator[Tuple[str, str, Optional[str]], None, None]:
     """
     Process audio from file or YouTube URL.
@@ -195,6 +247,11 @@ def process_audio(
     
     # Clean up old files periodically
     cleanup_old_files(max_age_hours=24)
+    
+    # Load vocabulary if provided
+    initial_prompt, vocab_status = load_vocabulary(vocabulary_file, max_words=30)
+    if vocab_status:
+        yield format_progress_html(2, vocab_status), "", None
     
     audio_path = None
     temp_files = []
@@ -265,6 +322,7 @@ def process_audio(
                 audio_path,
                 language=language if language != "auto" else None,
                 task=task,
+                initial_prompt=initial_prompt,
                 progress_callback=transcribe_progress,
             )
         else:
@@ -286,6 +344,7 @@ def process_audio(
                 audio_path,
                 language=language if language != "auto" else None,
                 task=task,
+                initial_prompt=initial_prompt,
                 progress_callback=transcribe_progress,
             )
         
@@ -478,6 +537,29 @@ def create_interface() -> gr.Blocks:
                     visible=True,
                 )
                 
+                gr.Markdown("### 📚 Vocabulary (Optional)")
+                
+                vocabulary_input = gr.File(
+                    label="Upload Vocabulary File (vocabulary.txt)",
+                    file_types=[".txt"],
+                    type="filepath",
+                )
+                
+                gr.Markdown(
+                    """💡 **Tip:** Upload a vocabulary.txt file with one word per line.
+                    The first 30 words will be used as hints for Whisper.
+                    
+                    Example:
+                    ```
+                    受洗
+                    禱告
+                    聖經
+                    見證
+                    恩典
+                    ```
+                    """
+                )
+                
                 process_btn = gr.Button(
                     "🚀 Start",
                     variant="primary",
@@ -533,6 +615,7 @@ def create_interface() -> gr.Blocks:
                 merge_checkbox,
                 max_chars_slider,
                 multi_gpu_checkbox,
+                vocabulary_input,
             ],
             outputs=[status_text, srt_output, srt_file],
         )
