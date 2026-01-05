@@ -689,12 +689,6 @@ whisper-for-subs/
 ├── CHANGELOG.md                # 更新日誌
 ├── LICENSE                     # MIT 授權
 └── tmp/                        # 臨時文件（開發用）
-    ├── CUDA_FIX.md
-    ├── PERFORMANCE_OPTIMIZATION.md
-    ├── CHINESE_CONVERSION.md
-    ├── COPY_BUTTON.md
-    ├── VAD_MIN_SILENCE_SETTING.md
-    └── SESSION_SUMMARY.md
 ```
 
 ---
