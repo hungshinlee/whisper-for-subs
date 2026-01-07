@@ -40,6 +40,7 @@ MODEL_SIZES = [
     "large-v2",
     "large-v3",
     "large-v3-turbo",
+    "formospeech/whisper-large-v2-taiwanese-hakka-v1",
 ]
 
 
