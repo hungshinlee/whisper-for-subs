@@ -13,6 +13,71 @@ from faster_whisper import WhisperModel
 from vad import SileroVAD
 
 
+def ensure_model_ready(model_name: str) -> str:
+    """
+    Ensure the model is in CTranslate2 format.
+    If it's a known non-CT2 model, convert it automatically.
+    
+    Args:
+        model_name: Name of the model (e.g., "large-v3" or HF repo ID)
+        
+    Returns:
+        Path to the usable model (CT2 format)
+    """
+    # Map of models that need conversion -> target directory name
+    CUSTOM_MODELS = {
+        "formospeech/whisper-large-v2-taiwanese-hakka-v1": "whisper-large-v2-taiwanese-hakka-v1-ct2"
+    }
+    
+    if model_name not in CUSTOM_MODELS:
+        return model_name
+        
+    # Get cache directory
+    cache_dir = os.environ.get("HF_HOME", "/root/.cache/huggingface")
+    models_dir = os.path.join(cache_dir, "ct2_converted")
+    target_dir = os.path.join(models_dir, CUSTOM_MODELS[model_name])
+    
+    # Check if already converted
+    if os.path.exists(os.path.join(target_dir, "model.bin")):
+        print(f"✅ Found converted model at: {target_dir}")
+        return target_dir
+        
+    print(f"⚠️  Model {model_name} needs conversion to CTranslate2 format.")
+    print(f"   Converting to {target_dir}...")
+    
+    # Ensure directory exists
+    os.makedirs(target_dir, exist_ok=True)
+    
+    try:
+        # Run conversion using ct2-transformers-converter
+        # We use float16 by default as it's the standard for GPU
+        cmd = [
+            "ct2-transformers-converter",
+            "--model", model_name,
+            "--output_dir", target_dir,
+            "--quantization", "float16",
+            "--force",
+        ]
+        
+        print(f"   Running: {' '.join(cmd)}")
+        subprocess.check_call(cmd)
+        print("✅ Conversion complete!")
+        return target_dir
+        
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Conversion failed with code {e.returncode}")
+        # Cleanup
+        if os.path.exists(target_dir):
+            import shutil
+            shutil.rmtree(target_dir)
+        # Fallback to original name (will likely fail, but we tried)
+        return model_name
+    except Exception as e:
+        print(f"❌ Conversion error: {str(e)}")
+        return model_name
+
+
+
 # Supported languages for Whisper
 SUPPORTED_LANGUAGES = {
     "auto": "Auto Detect",
@@ -86,8 +151,14 @@ class WhisperTranscriber:
 
         # Load Whisper model
         print(f"Loading Whisper model: {model_size} on {self.device}")
+        
+        # Ensure model is ready (convert if necessary)
+        actual_model_path = ensure_model_ready(model_size)
+        if actual_model_path != model_size:
+            print(f"   Using converted model path: {actual_model_path}")
+
         self.model = WhisperModel(
-            model_size,
+            actual_model_path,
             device=self.device,
             compute_type=self.compute_type,
         )
