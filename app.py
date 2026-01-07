@@ -181,6 +181,7 @@ def process_audio(
     use_vad: bool,
     min_silence_duration_s: float,
     merge_subtitles: bool,
+    convert_to_traditional: bool,
     max_chars: int,
     use_multi_gpu: bool,
 ) -> Generator[Tuple[str, str, Optional[str]], None, None]:
@@ -296,7 +297,8 @@ def process_audio(
             return
         
         # Convert to Traditional Chinese if language is Chinese
-        if language == "zh":
+        # Convert to Traditional Chinese if language is Chinese and requested
+        if language == "zh" and convert_to_traditional:
             converter = get_converter()
             if converter.is_available():
                 yield format_progress_html(87, "Converting to Traditional Chinese..."), "", None
@@ -386,14 +388,14 @@ def create_interface() -> gr.Blocks:
     """Create and return Gradio interface."""
     
     with gr.Blocks(
-        title="Medical and Pharmaceutical ASR with Whisper",
+        title="ASR with Whisper for Subtitles",
         theme=gr.themes.Soft(),
         css=CUSTOM_CSS,
     ) as app:
         
         gr.Markdown(
             """
-            # 🎙️ Medical and Pharmaceutical ASR with Whisper
+            # 🎙️ ASR with Whisper for Subtitles
             
             Note: large-v3-turbo is for "**transcribe**" only.
             """
@@ -451,6 +453,11 @@ def create_interface() -> gr.Blocks:
                     merge_checkbox = gr.Checkbox(
                         value=True,
                         label="Merge Short Subtitles",
+                    )
+                    
+                    zh_conv_checkbox = gr.Checkbox(
+                        value=True,
+                        label="Convert to Traditional Chinese (for ZH)",
                     )
                 
                 min_silence_slider = gr.Slider(
@@ -531,6 +538,7 @@ def create_interface() -> gr.Blocks:
                 use_vad_checkbox,
                 min_silence_slider,
                 merge_checkbox,
+                zh_conv_checkbox,
                 max_chars_slider,
                 multi_gpu_checkbox,
             ],
