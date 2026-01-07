@@ -12,7 +12,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import soundfile as sf
 
-from transcriber import WhisperTranscriber
+from transcriber import WhisperTranscriber, ensure_model_ready
 from vad import SileroVAD
 from chinese_converter import convert_segments_to_traditional, get_converter
 
@@ -183,6 +183,10 @@ class ParallelWhisperTranscriber:
         self.compute_type = compute_type
         self.gpu_ids = gpu_ids or [0, 1, 2, 3]
         self.num_gpus = len(self.gpu_ids)
+        
+        # Ensure model is ready (convert if necessary)
+        # This update self.model_size to the converted path so workers use the converted model
+        self.model_size = ensure_model_ready(model_size)
         
         print(f"Initialized ParallelWhisperTranscriber with {self.num_gpus} GPUs: {self.gpu_ids}")
         print(f"Using multiprocessing start method: {multiprocessing.get_start_method()}")
