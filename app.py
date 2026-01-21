@@ -15,6 +15,7 @@ from threading import Lock
 import gradio as gr
 import soundfile as sf
 import torch
+from fastapi.responses import FileResponse
 
 from transcriber import (
     WhisperTranscriber,
@@ -581,10 +582,6 @@ def get_system_info() -> str:
 def create_interface() -> gr.Blocks:
     """Create and return Gradio interface."""
 
-    # Set static paths for serving PDF files
-    docs_path = "/app/docs" if os.path.exists("/app/docs") else "docs"
-    gr.set_static_paths(paths=[docs_path])
-
     with gr.Blocks(
         title="FormoSST: Speech-to-Text System for Taiwanese Languages",
         theme=gr.themes.Soft(),
@@ -607,11 +604,11 @@ def create_interface() -> gr.Blocks:
             else f"docs/{pdf_filename}"
         )
         if os.path.exists(pdf_path):
-            # Static files are served with just the filename (relative to static path)
+            # Use custom FastAPI route
             gr.HTML(
-                f"""
+                """
                 <div style="margin: 15px 0; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                    <a href="/file={pdf_filename}" target="_blank" style="color: white; text-decoration: none; font-size: 16px; font-weight: 500; display: flex; align-items: center; gap: 8px;">
+                    <a href="/terms-and-privacy" target="_blank" style="color: white; text-decoration: none; font-size: 16px; font-weight: 500; display: flex; align-items: center; gap: 8px;">
                         <span style="font-size: 20px;">📄</span>
                         <span>使用者條款、資訊安全與隱私權政策 (Terms and Privacy Policy)</span>
                         <span style="margin-left: auto; font-size: 14px;">↗</span>
@@ -852,6 +849,25 @@ def main():
     print("  - Transcriber pool (max 2 concurrent)")
     print("  - Enhanced file cleanup")
     print("  - UUID-based naming\n")
+
+    # Add custom route for PDF file using FastAPI
+    @app.fastapi_app.get("/terms-and-privacy")
+    async def serve_pdf():
+        """Serve the Terms and Privacy PDF file."""
+        pdf_path = (
+            "/app/docs/Terms_and_Privacy.pdf"
+            if os.path.exists("/app/docs/Terms_and_Privacy.pdf")
+            else "docs/Terms_and_Privacy.pdf"
+        )
+        if os.path.exists(pdf_path):
+            return FileResponse(
+                pdf_path,
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": "inline; filename=Terms_and_Privacy.pdf"
+                },
+            )
+        return {"error": "File not found"}
 
     app.launch(
         server_name=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
