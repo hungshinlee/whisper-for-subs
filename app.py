@@ -605,8 +605,8 @@ def create_interface() -> gr.Blocks:
             else f"docs/{pdf_filename}"
         )
         if os.path.exists(pdf_path):
-            gr.Markdown(
-                '[使用者條款、資訊安全與隱私權政策 (Terms and Privacy Policy)](/terms-and-privacy){:target="_blank"}'
+            gr.HTML(
+                '<a href="/terms-and-privacy" target="_blank">使用者條款、資訊安全與隱私權政策 (Terms and Privacy Policy)</a>'
             )
 
         with gr.Row():
