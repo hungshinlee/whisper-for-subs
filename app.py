@@ -587,15 +587,27 @@ def create_interface() -> gr.Blocks:
         css=CUSTOM_CSS,
     ) as app:
         gr.Markdown(
-            f"""
+            """
             # FormoSST: Speech-to-Text System for Taiwanese Languages
             ## 臺灣語音辨識暨翻譯系統
-
-            [使用者條款、資訊安全與隱私權政策](/file={os.path.abspath("docs/Terms_and_Privacy.pdf")})
                         
             Note: large-v3-turbo is for "**transcribe**" only.
             """
         )
+
+        # Terms and Privacy PDF
+        pdf_path = (
+            "/app/docs/Terms_and_Privacy.pdf"
+            if os.path.exists("/app/docs/Terms_and_Privacy.pdf")
+            else "docs/Terms_and_Privacy.pdf"
+        )
+        if os.path.exists(pdf_path):
+            gr.File(
+                value=pdf_path,
+                label="📄 使用者條款、資訊安全與隱私權政策 (Terms and Privacy Policy)",
+                visible=True,
+                interactive=False,
+            )
 
         with gr.Row():
             # Left column: Input
@@ -836,7 +848,7 @@ def main():
         share=False,
         show_error=True,
         max_file_size="500mb",
-        allowed_paths=[os.path.abspath("docs")],
+        allowed_paths=["/app/docs", os.path.abspath("docs")],
     )
 
 
