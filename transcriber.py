@@ -84,12 +84,24 @@ def ensure_model_ready(model_name: str) -> str:
 # Supported languages for Whisper
 SUPPORTED_LANGUAGES = {"auto": "Auto", "zh": "Mandarin", "en": "English"}
 
-# Model sizes
-MODEL_SIZES = [
-    "large-v3",
-    "large-v3-turbo",
-    "formospeech/whisper-large-v2-taiwanese-hakka-v1",
-]
+# Model configurations with labels
+MODEL_CONFIGS = {
+    "large-v3": {
+        "label": "General",
+        "display_name": "[General] large-v3",
+    },
+    "large-v3-turbo": {
+        "label": "General",
+        "display_name": "[General] large-v3-turbo",
+    },
+    "formospeech/whisper-large-v2-taiwanese-hakka-v1": {
+        "label": "Hakka",
+        "display_name": "[Hakka] formospeech/whisper-large-v2-taiwanese-hakka-v1",
+    },
+}
+
+# Model IDs list (for backward compatibility)
+MODEL_SIZES = list(MODEL_CONFIGS.keys())
 
 
 class WhisperTranscriber:

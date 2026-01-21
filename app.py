@@ -22,6 +22,7 @@ from transcriber import (
     WhisperTranscriber,
     SUPPORTED_LANGUAGES,
     MODEL_SIZES,
+    MODEL_CONFIGS,
 )
 from parallel_transcriber import ParallelWhisperTranscriber
 from youtube_downloader import (
@@ -607,7 +608,10 @@ def create_interface() -> gr.Blocks:
                 gr.Markdown("### ⚙️ Settings")
 
                 model_dropdown = gr.Dropdown(
-                    choices=MODEL_SIZES,
+                    choices=[
+                        (MODEL_CONFIGS[model_id]["display_name"], model_id)
+                        for model_id in MODEL_SIZES
+                    ],
                     value=os.environ.get("WHISPER_MODEL", "large-v3-turbo"),
                     label="Model",
                 )
