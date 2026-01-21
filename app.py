@@ -568,7 +568,8 @@ def create_interface() -> gr.Blocks:
             - **[李鴻欣 Hung-Shin Lee](https://www.linkedin.com/in/hungshinlee)**（聯和科創）
             - **[陳力瑋 Li-Wei Chen](mailto:wayne900619@gmail.com)**（國立清華大學）
             ### Contributors
-            - **[王新民 Hsin-Min Wang](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html)**（中央研究院資訊科學研究所）                      
+            - **[王新民 Hsin-Min Wang](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html)**（中央研究院資訊科學研究所）
+            - **[廖沛俊 Pei-Jun Liao](mailto:newsboy3423@gmail.com)**（中央研究院資訊科學研究所）                      
             """
         )
 
