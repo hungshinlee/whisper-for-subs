@@ -1,6 +1,5 @@
 """
 Gradio-based web interface for Whisper ASR service.
-IMPROVED VERSION: Multi-user isolation and enhanced cleanup
 """
 
 import os
@@ -23,10 +22,7 @@ from transcriber import (
     MODEL_SIZES,
     get_gpu_info,
 )
-from parallel_transcriber import (
-    ParallelWhisperTranscriber,
-    transcribe_with_multiple_gpus,
-)
+from parallel_transcriber import ParallelWhisperTranscriber
 from youtube_downloader import (
     is_youtube_url,
     download_audio_with_progress,
@@ -595,7 +591,7 @@ def create_interface() -> gr.Blocks:
             # FormoSST: Speech-to-Text System for Taiwanese Languages
             ## 臺灣語音辨識暨翻譯系統
 
-            [使用者條款、資訊安全與隱私權政策](./docs/中央研究院資通系統－使用者條款、資訊安全與隱私權政策.pdf)
+            [使用者條款、資訊安全與隱私權政策](./docs/Terms_and_Privacy.pdf)
                         
             Note: large-v3-turbo is for "**transcribe**" only.
             """
