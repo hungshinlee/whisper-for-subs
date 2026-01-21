@@ -82,7 +82,7 @@ def ensure_model_ready(model_name: str) -> str:
 
 
 # Supported languages for Whisper
-SUPPORTED_LANGUAGES = {"auto": "Auto Detect", "zh": "Chinese", "en": "English"}
+SUPPORTED_LANGUAGES = {"auto": "Auto", "zh": "Mandarin", "en": "English"}
 
 # Model sizes
 MODEL_SIZES = [

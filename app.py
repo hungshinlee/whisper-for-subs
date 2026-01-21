@@ -634,14 +634,20 @@ def create_interface() -> gr.Blocks:
                     model_dropdown = gr.Dropdown(
                         choices=MODEL_SIZES,
                         value=os.environ.get("WHISPER_MODEL", "large-v3-turbo"),
-                        label="Model Size",
+                        label="Model",
                     )
 
                     language_dropdown = gr.Dropdown(
-                        choices=list(SUPPORTED_LANGUAGES.keys()),
+                        choices=[
+                            (name, code) for code, name in SUPPORTED_LANGUAGES.items()
+                        ],
                         value="auto",
                         label="Language",
                     )
+
+                # Check default model to set initial task state
+                default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
+                task_interactive = default_model != "large-v3-turbo"
 
                 with gr.Row():
                     task_radio = gr.Radio(
@@ -651,12 +657,16 @@ def create_interface() -> gr.Blocks:
                         ],
                         value="transcribe",
                         label="Task",
+                        interactive=task_interactive,
+                        info="Note: large-v3-turbo only supports Transcribe"
+                        if not task_interactive
+                        else None,
                     )
 
                 with gr.Row():
                     use_vad_checkbox = gr.Checkbox(
                         value=True,
-                        label="Enable VAD (Voice Activity Detection)",
+                        label="Enable VAD",
                     )
                     merge_checkbox = gr.Checkbox(
                         value=True,
@@ -665,7 +675,7 @@ def create_interface() -> gr.Blocks:
 
                     zh_conv_checkbox = gr.Checkbox(
                         value=True,
-                        label="Convert to Traditional Chinese (for ZH)",
+                        label="Convert to zh-TW",
                     )
 
                 min_silence_slider = gr.Slider(
@@ -680,7 +690,7 @@ def create_interface() -> gr.Blocks:
 
                 multi_gpu_checkbox = gr.Checkbox(
                     value=True,
-                    label="🚀 Use Multi-GPU Parallel Processing (for audio > 5 min)",
+                    label="Use Multi-GPU Parallel Processing (for audio > 5 min)",
                     info="Automatically enables for long audio files",
                 )
 
@@ -726,13 +736,6 @@ def create_interface() -> gr.Blocks:
         with gr.Accordion("System Information", open=False):
             system_info = gr.Markdown(get_system_info())
 
-        # Language mapping display
-        with gr.Accordion("Supported Languages", open=False):
-            lang_info = "\n".join(
-                f"- `{code}`: {name}" for code, name in SUPPORTED_LANGUAGES.items()
-            )
-            gr.Markdown(lang_info)
-
         # Event handlers
         process_btn.click(
             fn=process_audio,
@@ -750,6 +753,26 @@ def create_interface() -> gr.Blocks:
                 multi_gpu_checkbox,
             ],
             outputs=[status_text, srt_output, srt_file],
+        )
+
+        # Handle model selection change - disable translate for large-v3-turbo
+        def on_model_change(model_name):
+            """Handle model selection change."""
+            if model_name == "large-v3-turbo":
+                # Force transcribe mode and disable task selection
+                return gr.update(
+                    value="transcribe",
+                    interactive=False,
+                    info="Note: large-v3-turbo only supports Transcribe",
+                )
+            else:
+                # Enable task selection for other models
+                return gr.update(interactive=True, info=None)
+
+        model_dropdown.change(
+            fn=on_model_change,
+            inputs=[model_dropdown],
+            outputs=[task_radio],
         )
 
         # Clear YouTube when audio uploaded and vice versa
