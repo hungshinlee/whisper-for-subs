@@ -280,9 +280,6 @@ def process_audio(
     # Record start time
     start_time = time.time()
 
-    # Clean up old files periodically
-    cleanup_old_files(max_age_hours=24)
-
     audio_path = None
     temp_files = []
     video_title = "output"
@@ -838,9 +835,36 @@ def main():
     print("🚀 Starting Whisper ASR Service (Improved Version)")
     print("=" * 60 + "\n")
 
-    # Clean up old files on startup
-    print("🧹 Cleaning up old files...")
-    cleanup_old_files(max_age_hours=24)
+    # Clean up all temporary files on startup (fresh start)
+    print("🧹 Cleaning up temporary files...")
+
+    # Completely clean /tmp/whisper-downloads
+    tmp_dir = "/tmp/whisper-downloads"
+    if os.path.exists(tmp_dir):
+        try:
+            shutil.rmtree(tmp_dir)
+            print(f"  ✓ Cleaned {tmp_dir}")
+        except Exception as e:
+            print(f"  ⚠️  Failed to clean {tmp_dir}: {e}")
+
+    # Completely clean /tmp/whisper-sessions
+    sessions_dir = "/tmp/whisper-sessions"
+    if os.path.exists(sessions_dir):
+        try:
+            shutil.rmtree(sessions_dir)
+            print(f"  ✓ Cleaned {sessions_dir}")
+        except Exception as e:
+            print(f"  ⚠️  Failed to clean {sessions_dir}: {e}")
+
+    # Clean old SRT files in /app/outputs (keep structure)
+    output_dir = "/app/outputs"
+    if os.path.exists(output_dir):
+        try:
+            for f in glob.glob(os.path.join(output_dir, "*.srt")):
+                os.unlink(f)
+            print(f"  ✓ Cleaned old SRT files in {output_dir}")
+        except Exception as e:
+            print(f"  ⚠️  Failed to clean {output_dir}: {e}")
 
     # Pre-load model if specified
     default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
