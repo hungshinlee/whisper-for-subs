@@ -597,7 +597,7 @@ def create_interface() -> gr.Blocks:
             """
         )
 
-        # Terms and Privacy PDF - Link to open in new tab
+        # Terms and Privacy PDF - Simple link
         pdf_filename = "Terms_and_Privacy.pdf"
         pdf_path = (
             f"/app/docs/{pdf_filename}"
@@ -605,17 +605,8 @@ def create_interface() -> gr.Blocks:
             else f"docs/{pdf_filename}"
         )
         if os.path.exists(pdf_path):
-            # Use custom FastAPI route
-            gr.HTML(
-                """
-                <div style="margin: 15px 0; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                    <a href="/terms-and-privacy" target="_blank" style="color: white; text-decoration: none; font-size: 16px; font-weight: 500; display: flex; align-items: center; gap: 8px;">
-                        <span style="font-size: 20px;">📄</span>
-                        <span>使用者條款、資訊安全與隱私權政策 (Terms and Privacy Policy)</span>
-                        <span style="margin-left: auto; font-size: 14px;">↗</span>
-                    </a>
-                </div>
-                """
+            gr.Markdown(
+                '[使用者條款、資訊安全與隱私權政策 (Terms and Privacy Policy)](/terms-and-privacy){:target="_blank"}'
             )
 
         with gr.Row():
