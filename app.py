@@ -630,14 +630,14 @@ def create_interface() -> gr.Blocks:
 
                 gr.Markdown("### ⚙️ Settings")
 
-                with gr.Row():
-                    model_dropdown = gr.Dropdown(
-                        choices=MODEL_SIZES,
-                        value=os.environ.get("WHISPER_MODEL", "large-v3-turbo"),
-                        label="Model",
-                    )
+                model_dropdown = gr.Dropdown(
+                    choices=MODEL_SIZES,
+                    value=os.environ.get("WHISPER_MODEL", "large-v3-turbo"),
+                    label="Model",
+                )
 
-                    language_dropdown = gr.Dropdown(
+                with gr.Row():
+                    language_radio = gr.Radio(
                         choices=[
                             (name, code) for code, name in SUPPORTED_LANGUAGES.items()
                         ],
@@ -683,15 +683,15 @@ def create_interface() -> gr.Blocks:
                     maximum=2.0,
                     value=0.1,
                     step=0.01,
-                    label="VAD: Min Silence Duration (seconds)",
-                    info="Minimum silence duration to split segments (default: 0.1s)",
+                    label="VAD: Minimum Silence Duration (seconds)",
+                    # info="Minimum silence duration to split segments (default: 0.1s)",
                     visible=True,
                 )
 
                 multi_gpu_checkbox = gr.Checkbox(
                     value=True,
                     label="Use Multi-GPU Parallel Processing (for audio > 5 min)",
-                    info="Automatically enables for long audio files",
+                    # info="Automatically enables for long audio files",
                 )
 
                 max_chars_slider = gr.Slider(
@@ -743,7 +743,7 @@ def create_interface() -> gr.Blocks:
                 audio_input,
                 youtube_input,
                 model_dropdown,
-                language_dropdown,
+                language_radio,
                 task_radio,
                 use_vad_checkbox,
                 min_silence_slider,
