@@ -15,6 +15,7 @@ from threading import Lock
 import gradio as gr
 import soundfile as sf
 import torch
+from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
 from transcriber import (
@@ -834,24 +835,11 @@ def main():
         transcriber_pool.release_single_gpu_transcriber(worker_id)
         print(f"✅ Model pre-loaded")
 
-    # Create and launch app with queue for concurrent requests
-    app = create_interface()
+    # Create FastAPI app
+    fastapi_app = FastAPI()
 
-    # Enable queue for handling multiple users
-    # Transcriber pool ensures isolation between concurrent requests
-    app.queue(
-        max_size=10,
-        default_concurrency_limit=2,  # Allow 2 concurrent processing
-    )
-
-    print("\n✨ Improvements enabled:")
-    print("  - Session-based isolation")
-    print("  - Transcriber pool (max 2 concurrent)")
-    print("  - Enhanced file cleanup")
-    print("  - UUID-based naming\n")
-
-    # Add custom route for PDF file using FastAPI
-    @app.fastapi_app.get("/terms-and-privacy")
+    # Add custom route for PDF file
+    @fastapi_app.get("/terms-and-privacy")
     async def serve_pdf():
         """Serve the Terms and Privacy PDF file."""
         pdf_path = (
@@ -869,12 +857,36 @@ def main():
             )
         return {"error": "File not found"}
 
-    app.launch(
-        server_name=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
-        server_port=int(os.environ.get("GRADIO_SERVER_PORT", 7860)),
-        share=False,
-        show_error=True,
-        max_file_size="500mb",
+    # Create Gradio interface
+    gradio_app = create_interface()
+
+    # Enable queue for handling multiple users
+    gradio_app.queue(
+        max_size=10,
+        default_concurrency_limit=2,  # Allow 2 concurrent processing
+    )
+
+    print("\n✨ Improvements enabled:")
+    print("  - Session-based isolation")
+    print("  - Transcriber pool (max 2 concurrent)")
+    print("  - Enhanced file cleanup")
+    print("  - UUID-based naming")
+    print("  - Custom PDF serving route\n")
+
+    # Mount Gradio app on FastAPI
+    fastapi_app = gr.mount_gradio_app(
+        fastapi_app,
+        gradio_app,
+        path="/",
+    )
+
+    # Launch with uvicorn
+    import uvicorn
+
+    uvicorn.run(
+        fastapi_app,
+        host=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
+        port=int(os.environ.get("GRADIO_SERVER_PORT", 7860)),
     )
 
 
