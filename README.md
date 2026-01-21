@@ -1,12 +1,12 @@
-# Whisper ASR 字幕生成服務 🎙️
+# FormoSST: Speech-to-Text System for Taiwanese Languages 🎙️
+
+**臺灣語音辨識暨翻譯系統**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://www.docker.com/)
 [![GPU](https://img.shields.io/badge/Multi--GPU-Supported-green.svg)](https://developer.nvidia.com/cuda-toolkit)
 
-使用 OpenAI Whisper 模型的專業級自動語音辨識 (ASR) 服務，可將音檔、影片或 YouTube 影片轉換為高品質 SRT 字幕檔。
-
-[English](./docs/README.en.md) | [更新日誌](./docs/CHANGELOG.md)
+使用 OpenAI Whisper 模型的專業級自動語音辨識 (ASR) 服務，專為台灣語言優化，可將音檔、影片或 YouTube 影片轉換為高品質 SRT 字幕檔。
 
 ---
 
@@ -14,9 +14,12 @@
 
 ### 🚀 核心功能
 - **多種輸入方式**：上傳音檔、影片，或輸入 YouTube 網址
-- **多語言支援**：支援中文、英文、日文、韓文等 18 種語言
+- **台灣語言優化**：支援國語（Mandarin）、英文（English）及自動偵測
 - **雙重模式**：轉錄 (Transcribe) 或翻譯成英文 (Translate)
-- **高品質模型**：使用 Whisper large-v3 和 large-v3-turbo 模型
+- **多模型支援**：
+  - `large-v3-turbo` - 快速高效（僅支援 Transcribe）
+  - `large-v3` - 高品質通用模型
+  - `formospeech/whisper-large-v2-taiwanese-hakka-v1` - 台灣客語專用模型
 - **標準輸出格式**：生成標準 SRT 字幕檔
 
 ### ⚡ 性能優化
@@ -31,11 +34,15 @@
 - **可調整靈敏度**：自訂 VAD 最小靜音時長（0.01 - 2.0 秒）
 - **自動合併字幕**：將過短的字幕合併成適當長度
 - **繁體中文支持**：選擇中文時，自動將簡體轉換為繁體（台灣標準） 🇹🇼
+- **模型智能限制**：
+  - `large-v3-turbo` 自動限制為 Transcribe 模式
+  - `formospeech` 模型自動限制為 Mandarin 語言
 
 ### 💻 介面功能
 - **美觀的 Web UI**：使用 Gradio 框架，操作簡單直觀
 - **即時進度顯示**：詳細的處理進度條和狀態訊息
 - **一鍵複製**：直接複製 SRT 內容到剪貼簿 📋
+- **PDF 文件查看**：內建使用者條款與隱私權政策文件
 
 ---
 
@@ -95,35 +102,24 @@ docker compose logs -f
 
 ```yaml
 environment:
-  - WHISPER_MODEL=large-v3-turbo        # 模型：large-v3-turbo, large-v3, large-v2
+  - WHISPER_MODEL=large-v3-turbo        # 模型選擇
   - WHISPER_COMPUTE_TYPE=float16         # 精度：float16, int8, float32
   - CUDA_VISIBLE_DEVICES=0,1,2,3        # 使用的 GPU
+  - GRADIO_SERVER_NAME=0.0.0.0          # 伺服器位址
+  - GRADIO_SERVER_PORT=7860             # 伺服器埠號
 ```
 
 ### 可用模型
 
-| 模型 | VRAM | 速度 | 推薦 |
-|------|------|------|------|
-| `large-v3-turbo` | ~6 GB | 快 ⚡ | ✅ **推薦** |
-| `large-v3` | ~10 GB | 較慢 | 高品質需求 |
-| `large-v2` | ~10 GB | 較慢 | 向下相容 |
+| 模型 | 語言支援 | Task 支援 | VRAM | 速度 | 推薦 |
+|------|---------|----------|------|------|------|
+| `large-v3-turbo` | Auto, Mandarin, English | Transcribe only | ~6 GB | 快 ⚡ | ✅ **推薦** |
+| `large-v3` | Auto, Mandarin, English | Transcribe, Translate | ~10 GB | 較慢 | 高品質需求 |
+| `formospeech/whisper-large-v2-taiwanese-hakka-v1` | Mandarin only | Transcribe, Translate | ~10 GB | 較慢 | 台灣客語 |
 
 ---
 
-## 📖 詳細文檔
-
-完整的使用指南和技術文檔請參考 [docs](./docs) 目錄：
-
-- **[部署指南](./docs/DEPLOYMENT_GUIDE.md)** - 詳細的安裝和配置說明
-- **[多 GPU 指南](./docs/MULTI_GPU_GUIDE.md)** - 多 GPU 並行處理詳解
-- **[快速開始 (多 GPU)](./docs/QUICKSTART_MULTI_GPU.md)** - 快速設置多 GPU 環境
-- **[故障排除](./docs/TROUBLESHOOTING_MULTI_GPU.md)** - 常見問題解決方案
-- **[更新日誌](./docs/CHANGELOG.md)** - 版本更新記錄
-- **[English Version](./docs/README.en.md)** - English documentation
-
----
-
-## 🛠️ 系統需求
+## ️ 系統需求
 
 ### 必需
 - **作業系統**: Ubuntu 22.04 / 24.04
@@ -153,11 +149,12 @@ result = client.predict(
     audio_file="/path/to/audio.wav",
     youtube_url="",
     model_size="large-v3-turbo",
-    language="zh",
-    task="transcribe",
+    language="auto",  # auto, zh, en
+    task="transcribe",  # transcribe, translate
     use_vad=True,
     min_silence_duration_s=0.1,
     merge_subtitles=True,
+    zh_conv=True,  # Convert to Traditional Chinese
     max_chars=80,
     use_multi_gpu=True,
     api_name="/process_audio"
@@ -173,7 +170,7 @@ print(srt_content)
 
 ```
 whisper-for-subs/
-├── app.py                      # Gradio Web 介面
+├── app.py                      # Gradio Web 介面（FastAPI + Gradio）
 ├── transcriber.py              # 單 GPU 轉錄邏輯
 ├── parallel_transcriber.py     # 多 GPU 並行處理
 ├── vad.py                      # Silero VAD 語音檢測
@@ -183,15 +180,25 @@ whisper-for-subs/
 ├── requirements.txt            # Python 依賴
 ├── Dockerfile                  # Docker 映像檔
 ├── docker-compose.yml          # Docker Compose 配置
-├── docs/                       # 詳細文檔
-│   ├── DEPLOYMENT_GUIDE.md
-│   ├── MULTI_GPU_GUIDE.md
-│   ├── QUICKSTART_MULTI_GPU.md
-│   ├── TROUBLESHOOTING_MULTI_GPU.md
-│   ├── CHANGELOG.md
-│   └── README.en.md
+├── docs/                       # 政策文件
+│   └── Terms_and_Privacy.pdf   # 使用者條款與隱私權政策
 └── README.md                   # 本文件
 ```
+
+---
+
+## 🎨 主要改進
+
+### v2.0 更新
+- ✅ **FastAPI 整合**：使用 FastAPI 作為主應用，提供更好的擴展性
+- ✅ **PDF 文件服務**：內建 Terms and Privacy Policy 文件查看
+- ✅ **UI 優化**：
+  - Language 改為 Radio 按鈕（Auto, Mandarin, English）
+  - 模型特定限制（large-v3-turbo 只能 Transcribe，formospeech 只能 Mandarin）
+  - 移除冗餘的系統信息顯示
+- ✅ **代碼清理**：移除未使用的導入和變數
+- ✅ **多用戶隔離**：Session-based 文件管理
+- ✅ **Transcriber Pool**：防止多用戶間的干擾
 
 ---
 
@@ -213,22 +220,33 @@ MIT License - 詳見 [LICENSE](LICENSE) 文件
 
 ---
 
+## 👥 開發團隊
+
+### Developers
+- **[李鴻欣 Hung-Shin Lee](https://www.linkedin.com/in/hungshinlee)** - 聯和科創
+- **[陳力瑋 Li-Wei Chen](mailto:wayne900619@gmail.com)** - 國立清華大學
+
+### Contributors
+- **[王新民 Hsin-Min Wang](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html)** - 中央研究院資訊科學研究所
+
+---
+
 ## 🙏 致謝
 
 - [OpenAI Whisper](https://github.com/openai/whisper) - 語音辨識模型
 - [faster-whisper](https://github.com/guillaumekln/faster-whisper) - 高效推理引擎
 - [Silero VAD](https://github.com/snakers4/silero-vad) - 語音活動檢測
 - [Gradio](https://gradio.app/) - Web 介面框架
-- [王新民](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html) 教授 - 硬體支援
+- [FastAPI](https://fastapi.tiangolo.com/) - 現代 Web 框架
+- [FormosaSpeech](https://huggingface.co/formospeech) - 台灣語言模型
 
 ---
 
 ## 📞 支援
 
 - **Issues**: [GitHub Issues](https://github.com/hungshinlee/whisper-for-subs/issues)
-- **文檔**: [docs 目錄](./docs)
+- **Email**: hungshinlee@gmail.com
 
 ---
 
-**作者**: 李鴻欣 (Hung-Shin Lee) 、陳力瑋（Li-Wei Chen） 
-**Email**: hungshinlee@gmail.com
+**© 2024-2026 FormoSST Team. All rights reserved.**
