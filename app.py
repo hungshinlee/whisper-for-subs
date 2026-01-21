@@ -22,7 +22,6 @@ from transcriber import (
     WhisperTranscriber,
     SUPPORTED_LANGUAGES,
     MODEL_SIZES,
-    get_gpu_info,
 )
 from parallel_transcriber import ParallelWhisperTranscriber
 from youtube_downloader import (
@@ -551,31 +550,6 @@ def process_audio(
                 print(f"⚠️  Failed to clean session dir: {e}")
 
 
-def get_system_info() -> str:
-    """Get system and GPU information."""
-    info_lines = [
-        "**Source:** [王新民](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html) 教授（中央研究院資訊科學研究所）\n"
-    ]
-
-    gpu_info = get_gpu_info()
-    if gpu_info:
-        info_lines.append(f"**GPU Count:** {len(gpu_info)}\n")
-        for gpu in gpu_info:
-            info_lines.append(
-                f"- GPU {gpu['index']}: {gpu['name']} ({gpu['memory_total']:.1f} GB)"
-            )
-    else:
-        info_lines.append("**GPU:** No GPU available. Using CPU mode.")
-
-    info_lines.append("\n**Improvements:**")
-    info_lines.append("- ✅ Multi-user isolation with session management")
-    info_lines.append("- ✅ Transcriber pool prevents interference")
-    info_lines.append("- ✅ Enhanced cleanup for all temporary files")
-    info_lines.append("- ✅ UUID-based file naming prevents conflicts")
-
-    return "\n".join(info_lines)
-
-
 # Build Gradio interface
 def create_interface() -> gr.Blocks:
     """Create and return Gradio interface."""
@@ -591,10 +565,10 @@ def create_interface() -> gr.Blocks:
             ## 臺灣語音辨識暨翻譯系統
 
             ### Developers
-            - **[李鴻欣 Hung-Shin Lee](mailto:hungshinlee@gmail.com)**
-            - **[陳力瑋 Li-Wei Chen](mailto:wayne900619@gmail.com)**
+            - **[李鴻欣 Hung-Shin Lee](https://www.linkedin.com/in/hungshinlee)**（聯和科創）
+            - **[陳力瑋 Li-Wei Chen](mailto:wayne900619@gmail.com)**（國立清華大學）
             ### Contributors
-            - **[王新民 研究員](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html)（中央研究院資訊科學研究所）**                        
+            - **[王新民 Hsin-Min Wang](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html)**（中央研究院資訊科學研究所）                      
             """
         )
 
@@ -747,10 +721,6 @@ def create_interface() -> gr.Blocks:
                 srt_file = gr.File(
                     label="Download SRT File",
                 )
-
-        # System info
-        with gr.Accordion("System Information", open=False):
-            _ = gr.Markdown(get_system_info())
 
         # Event handlers
         process_btn.click(
