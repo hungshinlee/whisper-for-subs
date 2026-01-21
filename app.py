@@ -581,6 +581,10 @@ def get_system_info() -> str:
 def create_interface() -> gr.Blocks:
     """Create and return Gradio interface."""
 
+    # Set static paths for serving PDF files
+    docs_path = "/app/docs" if os.path.exists("/app/docs") else "docs"
+    gr.set_static_paths(paths=[docs_path])
+
     with gr.Blocks(
         title="FormoSST: Speech-to-Text System for Taiwanese Languages",
         theme=gr.themes.Soft(),
@@ -596,18 +600,18 @@ def create_interface() -> gr.Blocks:
         )
 
         # Terms and Privacy PDF - Link to open in new tab
+        pdf_filename = "Terms_and_Privacy.pdf"
         pdf_path = (
-            "/app/docs/Terms_and_Privacy.pdf"
-            if os.path.exists("/app/docs/Terms_and_Privacy.pdf")
-            else "docs/Terms_and_Privacy.pdf"
+            f"/app/docs/{pdf_filename}"
+            if os.path.exists(f"/app/docs/{pdf_filename}")
+            else f"docs/{pdf_filename}"
         )
         if os.path.exists(pdf_path):
-            # Use relative path for web access
-            pdf_web_path = "file/docs/Terms_and_Privacy.pdf"
+            # Static files are served at /file=<path>
             gr.HTML(
                 f"""
                 <div style="margin: 15px 0; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                    <a href="/{pdf_web_path}" target="_blank" style="color: white; text-decoration: none; font-size: 16px; font-weight: 500; display: flex; align-items: center; gap: 8px;">
+                    <a href="/file={pdf_path}" target="_blank" style="color: white; text-decoration: none; font-size: 16px; font-weight: 500; display: flex; align-items: center; gap: 8px;">
                         <span style="font-size: 20px;">📄</span>
                         <span>使用者條款、資訊安全與隱私權政策 (Terms and Privacy Policy)</span>
                         <span style="margin-left: auto; font-size: 14px;">↗</span>
@@ -855,7 +859,6 @@ def main():
         share=False,
         show_error=True,
         max_file_size="500mb",
-        allowed_paths=["/app/docs", os.path.abspath("docs")],
     )
 
 
