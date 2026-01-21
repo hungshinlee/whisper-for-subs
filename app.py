@@ -587,11 +587,11 @@ def create_interface() -> gr.Blocks:
         css=CUSTOM_CSS,
     ) as app:
         gr.Markdown(
-            """
+            f"""
             # FormoSST: Speech-to-Text System for Taiwanese Languages
             ## 臺灣語音辨識暨翻譯系統
 
-            [使用者條款、資訊安全與隱私權政策](/file{os.path.abspath("docs/Terms_and_Privacy.pdf")})
+            [使用者條款、資訊安全與隱私權政策](/file={os.path.abspath("docs/Terms_and_Privacy.pdf")})
                         
             Note: large-v3-turbo is for "**transcribe**" only.
             """
