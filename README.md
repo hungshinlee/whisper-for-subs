@@ -230,6 +230,5 @@ MIT License - 詳見 [LICENSE](LICENSE) 文件
 
 ---
 
-**作者**: 李鴻欣 (Hung-Shin Lee)  
-**公司**: 聯和科創（United Link Co., Ltd.）  
+**作者**: 李鴻欣 (Hung-Shin Lee) 、陳力瑋（Li-Wei Chen） 
 **Email**: hungshinlee@gmail.com
