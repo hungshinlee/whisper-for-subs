@@ -311,10 +311,7 @@ def process_audio(
                     None,
                 )
 
-            # Download audio to session directory with unique filename
-            video_id = (
-                info.get("id", uuid.uuid4().hex[:11]) if info else uuid.uuid4().hex[:11]
-            )
+            # Download audio to session directory
             download_dir = os.path.join(session_dir, "downloads")
             os.makedirs(download_dir, exist_ok=True)
 
@@ -592,8 +589,12 @@ def create_interface() -> gr.Blocks:
             """
             # FormoSST: Speech-to-Text System for Taiwanese Languages
             ## 臺灣語音辨識暨翻譯系統
-                        
-            Note: large-v3-turbo is for "**transcribe**" only.
+
+            ### Developers
+            - **[李鴻欣 Hung-Shin Lee](mailto:hungshinlee@gmail.com)**
+            - **[陳力瑋 Li-Wei Chen](mailto:wayne900619@gmail.com)**
+            ### Contributors
+            - **[王新民 研究員](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html)（中央研究院資訊科學研究所）**                        
             """
         )
 
@@ -636,17 +637,32 @@ def create_interface() -> gr.Blocks:
                     label="Model",
                 )
 
+                # Check default model to set initial language and task state
+                default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
+
+                # Determine language constraints based on model
+                if "formospeech" in default_model.lower():
+                    # Formospeech models only support Mandarin
+                    language_interactive = False
+                    language_value = "zh"
+                    language_info = "Note: This model only supports Mandarin"
+                else:
+                    language_interactive = True
+                    language_value = "auto"
+                    language_info = None
+
                 with gr.Row():
                     language_radio = gr.Radio(
                         choices=[
                             (name, code) for code, name in SUPPORTED_LANGUAGES.items()
                         ],
-                        value="auto",
+                        value=language_value,
                         label="Language",
+                        interactive=language_interactive,
+                        info=language_info,
                     )
 
-                # Check default model to set initial task state
-                default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
+                # Check task constraints based on model
                 task_interactive = default_model != "large-v3-turbo"
 
                 with gr.Row():
@@ -723,7 +739,7 @@ def create_interface() -> gr.Blocks:
 
                 with gr.Row():
                     copy_btn = gr.Button(
-                        "📋 Copy to Clipboard",
+                        "Copy to Clipboard",
                         elem_classes="copy-button",
                     )
                     copy_status = gr.HTML("", elem_classes="copy-success")
@@ -734,7 +750,7 @@ def create_interface() -> gr.Blocks:
 
         # System info
         with gr.Accordion("System Information", open=False):
-            system_info = gr.Markdown(get_system_info())
+            _ = gr.Markdown(get_system_info())
 
         # Event handlers
         process_btn.click(
@@ -755,24 +771,39 @@ def create_interface() -> gr.Blocks:
             outputs=[status_text, srt_output, srt_file],
         )
 
-        # Handle model selection change - disable translate for large-v3-turbo
+        # Handle model selection change - apply language and task constraints
         def on_model_change(model_name):
             """Handle model selection change."""
+            # Language constraints
+            if "formospeech" in model_name.lower():
+                # Formospeech models only support Mandarin
+                language_update = gr.update(
+                    value="zh",
+                    interactive=False,
+                    info="Note: This model only supports Mandarin",
+                )
+            else:
+                # Other models support all languages
+                language_update = gr.update(interactive=True, info=None)
+
+            # Task constraints
             if model_name == "large-v3-turbo":
-                # Force transcribe mode and disable task selection
-                return gr.update(
+                # large-v3-turbo only supports transcribe
+                task_update = gr.update(
                     value="transcribe",
                     interactive=False,
                     info="Note: large-v3-turbo only supports Transcribe",
                 )
             else:
-                # Enable task selection for other models
-                return gr.update(interactive=True, info=None)
+                # Other models support both tasks
+                task_update = gr.update(interactive=True, info=None)
+
+            return language_update, task_update
 
         model_dropdown.change(
             fn=on_model_change,
             inputs=[model_dropdown],
-            outputs=[task_radio],
+            outputs=[language_radio, task_radio],
         )
 
         # Clear YouTube when audio uploaded and vice versa
@@ -847,7 +878,7 @@ def main():
             default_model, True, 0.1
         )
         transcriber_pool.release_single_gpu_transcriber(worker_id)
-        print(f"✅ Model pre-loaded")
+        print("✅ Model pre-loaded")
 
     # Create FastAPI app
     fastapi_app = FastAPI()
@@ -879,13 +910,6 @@ def main():
         max_size=10,
         default_concurrency_limit=2,  # Allow 2 concurrent processing
     )
-
-    print("\n✨ Improvements enabled:")
-    print("  - Session-based isolation")
-    print("  - Transcriber pool (max 2 concurrent)")
-    print("  - Enhanced file cleanup")
-    print("  - UUID-based naming")
-    print("  - Custom PDF serving route\n")
 
     # Mount Gradio app on FastAPI
     fastapi_app = gr.mount_gradio_app(

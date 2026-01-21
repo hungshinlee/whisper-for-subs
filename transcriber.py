@@ -5,7 +5,7 @@ Whisper transcription module using faster-whisper for efficient inference.
 import os
 import tempfile
 import subprocess
-from typing import List, Optional, Tuple, Generator
+from typing import List, Optional, Generator
 import numpy as np
 import torch
 
@@ -145,7 +145,7 @@ class WhisperTranscriber:
             device=self.device,
             compute_type=self.compute_type,
         )
-        print(f"✅ Model loaded successfully")
+        print("✅ Model loaded successfully")
 
         # Load VAD if enabled
         self.vad = None
@@ -270,7 +270,7 @@ class WhisperTranscriber:
         speed_ratio = duration / elapsed if elapsed > 0 else 0
         gpu_info = f"GPU {self.gpu_index}" if self.gpu_index is not None else "CPU"
 
-        print(f"✅ Transcription complete!")
+        print("✅ Transcription complete!")
         print(f"   Device: {gpu_info}")
         print(f"   Segments: {len(segments)}")
         print(f"   Duration: {duration:.1f}s")
