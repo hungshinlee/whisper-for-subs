@@ -591,7 +591,7 @@ def create_interface() -> gr.Blocks:
             # FormoSST: Speech-to-Text System for Taiwanese Languages
             ## 臺灣語音辨識暨翻譯系統
 
-            [使用者條款、資訊安全與隱私權政策](./docs/Terms_and_Privacy.pdf)
+            [使用者條款、資訊安全與隱私權政策](/file/docs/Terms_and_Privacy.pdf)
                         
             Note: large-v3-turbo is for "**transcribe**" only.
             """
