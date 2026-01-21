@@ -836,6 +836,7 @@ def main():
         share=False,
         show_error=True,
         max_file_size="500mb",
+        allowed_paths=["docs"],
     )
 
 
