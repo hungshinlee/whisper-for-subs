@@ -1,5 +1,7 @@
 services:
   whisper-asr:
+    env_file:
+      - .env
     build:
       context: .
       dockerfile: Dockerfile
@@ -25,6 +27,7 @@ services:
       - WHISPER_MODEL=large-v3-turbo
       - WHISPER_DEVICE=cuda
       - WHISPER_COMPUTE_TYPE=float16
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
     deploy:
       resources:
         reservations:

@@ -617,7 +617,10 @@ def create_interface() -> gr.Blocks:
                 default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 
                 # Determine language constraints based on model
-                if "formospeech" in default_model.lower():
+                if any(m in default_model for m in [
+                    "formospeech/whisper-large-v2-taiwanese-hakka-v1",
+                    "formospeech/whisper-large-v3-taiwanese-hakka",
+                ]):
                     # Formospeech models only support Mandarin
                     language_interactive = False
                     language_value = "zh"
@@ -747,7 +750,10 @@ def create_interface() -> gr.Blocks:
         def on_model_change(model_name):
             """Handle model selection change."""
             # Language constraints
-            if "formospeech" in model_name.lower():
+            if any(m in model_name for m in [
+                "formospeech/whisper-large-v2-taiwanese-hakka-v1",
+                "formospeech/whisper-large-v3-taiwanese-hakka",
+            ]):
                 # Formospeech models only support Mandarin
                 language_update = gr.update(
                     value="zh",

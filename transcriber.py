@@ -26,7 +26,8 @@ def ensure_model_ready(model_name: str) -> str:
     """
     # Map of models that need conversion -> target directory name
     CUSTOM_MODELS = {
-        "formospeech/whisper-large-v2-taiwanese-hakka-v1": "whisper-large-v2-taiwanese-hakka-v1-ct2"
+        "formospeech/whisper-large-v2-taiwanese-hakka-v1": "whisper-large-v2-taiwanese-hakka-v1-ct2",
+        "formospeech/whisper-large-v3-taiwanese-hakka": "whisper-large-v3-taiwanese-hakka-ct2",
     }
 
     if model_name not in CUSTOM_MODELS:
@@ -97,6 +98,10 @@ MODEL_CONFIGS = {
     "formospeech/whisper-large-v2-taiwanese-hakka-v1": {
         "label": "Hakka",
         "display_name": "[Hakka] formospeech/whisper-large-v2-taiwanese-hakka-v1",
+    },
+    "formospeech/whisper-large-v3-taiwanese-hakka": {
+        "label": "Hakka",
+        "display_name": "[Hakka] formospeech/whisper-large-v3-taiwanese-hakka",
     },
 }
 

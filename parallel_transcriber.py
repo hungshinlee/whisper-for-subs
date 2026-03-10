@@ -312,24 +312,10 @@ class ParallelWhisperTranscriber:
         skipped = 0
         failed = 0
         
-        # Create executor with worker initialization
+        # Create one executor per GPU, each with a single persistent worker.
+        # Using spawn context for CUDA compatibility.
         mp_context = multiprocessing.get_context('spawn')
         
-        # Create init args for each worker (one worker per GPU)
-        # Worker i will use GPU self.gpu_ids[i]
-        with ProcessPoolExecutor(
-            max_workers=self.num_gpus,
-            mp_context=mp_context,
-            initializer=_init_worker,
-            initargs=(self.gpu_ids[0], self.model_size, self.compute_type),  # Will be overridden
-        ) as executor:
-            
-            # We need to manually create workers with different GPU IDs
-            # This is a workaround for ProcessPoolExecutor's limitation
-            # Instead, we'll use a different approach: create separate executors
-            pass
-        
-        # Better approach: Create separate executor for each GPU
         executors = []
         for gpu_id in self.gpu_ids:
             executor = ProcessPoolExecutor(
@@ -343,10 +329,10 @@ class ParallelWhisperTranscriber:
         try:
             # Submit tasks round-robin to each executor
             future_to_segment = {}
-            for idx, task in enumerate(tasks):
+            for idx, task_args in enumerate(tasks):
                 executor_idx = idx % self.num_gpus
-                future = executors[executor_idx].submit(transcribe_segment_on_gpu, task)
-                future_to_segment[future] = task[0]  # segment_idx
+                future = executors[executor_idx].submit(transcribe_segment_on_gpu, task_args)
+                future_to_segment[future] = task_args[0]  # segment_idx
             
             # Collect results as they complete
             for future in as_completed(future_to_segment):
