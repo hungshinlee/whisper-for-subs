@@ -461,7 +461,15 @@ class WhisperTranscriber:
         word_timestamps: bool,
         progress_callback=None,
     ) -> List[dict]:
-        """Transcribe without VAD (use Whisper's built-in VAD)."""
+        """Transcribe without VAD.
+
+        NOTE: vad_filter=False is intentional.
+        When vad_filter=True, faster-whisper creates an internal feature
+        extractor that ignores self.model.feature_extractor entirely,
+        causing n_mels mismatch errors on v3 models (expects 128, gets 80).
+        Callers (parallel_transcriber) already do VAD segmentation before
+        reaching this method, so built-in VAD is unnecessary anyway.
+        """
         if progress_callback:
             progress_callback(20, "Starting transcription...")
 
@@ -471,7 +479,7 @@ class WhisperTranscriber:
             task=task,
             initial_prompt=initial_prompt,
             word_timestamps=word_timestamps,
-            vad_filter=True,
+            vad_filter=False,  # Must be False — see docstring above
         )
 
         segments = []
