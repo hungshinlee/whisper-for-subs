@@ -16,6 +16,38 @@ from faster_whisper import WhisperModel
 from vad import SileroVAD
 
 
+def _patch_model_config(model_dir: str, n_mels: int) -> None:
+    """
+    Ensure the CT2 model's config.json has the correct n_mels value.
+
+    This is the only reliable fix for the (1,80,3000) vs (1,128,3000) shape
+    mismatch: faster-whisper reads n_mels from config.json at WhisperModel
+    __init__ time to construct FeatureExtractor. If the value is wrong there,
+    no amount of post-load patching can fix it reliably across versions.
+    """
+    import json
+
+    config_path = os.path.join(model_dir, "config.json")
+    if not os.path.exists(config_path):
+        # Create a minimal config so faster-whisper reads the correct n_mels
+        config = {}
+    else:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+    if config.get("num_mel_bins") == n_mels and config.get("n_mels") == n_mels:
+        print(f"✅ config.json already has n_mels={n_mels}")
+        return
+
+    # faster-whisper checks both keys depending on version
+    config["num_mel_bins"] = n_mels
+    config["n_mels"] = n_mels
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    print(f"✅ Patched config.json: n_mels={n_mels} in {config_path}")
+
+
 def ensure_model_ready(model_name: str) -> str:
     """
     Ensure the model is in CTranslate2 format.
@@ -27,23 +59,46 @@ def ensure_model_ready(model_name: str) -> str:
     Returns:
         Path to the usable model (CT2 format)
     """
-    # Map of models that need conversion -> target directory name
+    # Map of models that need conversion -> (target directory name, n_mels)
     CUSTOM_MODELS = {
-        "formospeech/whisper-large-v2-taiwanese-hakka-v1": "whisper-large-v2-taiwanese-hakka-v1-ct2",
-        "formospeech/whisper-large-v3-taiwanese-hakka": "whisper-large-v3-taiwanese-hakka-ct2",
+        "formospeech/whisper-large-v2-taiwanese-hakka-v1": (
+            "whisper-large-v2-taiwanese-hakka-v1-ct2", 80,
+        ),
+        "formospeech/whisper-large-v3-taiwanese-hakka": (
+            "whisper-large-v3-taiwanese-hakka-ct2", 128,
+        ),
     }
 
     if model_name not in CUSTOM_MODELS:
+        # For built-in models (large-v3, large-v3-turbo etc.) patch their
+        # cached config so faster-whisper always reads the correct n_mels.
+        is_v3 = "v3" in model_name.lower()
+        if is_v3:
+            # faster-whisper caches downloaded CT2 models under:
+            # ~/.cache/huggingface/hub/models--Systran--faster-whisper-*/snapshots/*/
+            import glob
+            hf_cache = os.environ.get("HF_HOME", "/root/.cache/huggingface")
+            pattern = os.path.join(
+                hf_cache, "hub",
+                f"models--Systran--faster-{model_name.replace('/', '-')}",
+                "snapshots", "*",
+            )
+            for snapshot_dir in glob.glob(pattern):
+                _patch_model_config(snapshot_dir, n_mels=128)
         return model_name
+
+    target_dirname, n_mels = CUSTOM_MODELS[model_name]
 
     # Get cache directory
     cache_dir = os.environ.get("HF_HOME", "/root/.cache/huggingface")
     models_dir = os.path.join(cache_dir, "ct2_converted")
-    target_dir = os.path.join(models_dir, CUSTOM_MODELS[model_name])
+    target_dir = os.path.join(models_dir, target_dirname)
 
     # Check if already converted
     if os.path.exists(os.path.join(target_dir, "model.bin")):
         print(f"✅ Found converted model at: {target_dir}")
+        # Always re-patch config in case it was overwritten
+        _patch_model_config(target_dir, n_mels=n_mels)
         return target_dir
 
     print(f"⚠️  Model {model_name} needs conversion to CTranslate2 format.")
@@ -53,8 +108,6 @@ def ensure_model_ready(model_name: str) -> str:
     os.makedirs(target_dir, exist_ok=True)
 
     try:
-        # Run conversion using ct2-transformers-converter
-        # We use float16 by default as it's the standard for GPU
         cmd = [
             "ct2-transformers-converter",
             "--model",
@@ -69,16 +122,16 @@ def ensure_model_ready(model_name: str) -> str:
         print(f"   Running: {' '.join(cmd)}")
         subprocess.check_call(cmd)
         print("✅ Conversion complete!")
+
+        # Patch config immediately after conversion
+        _patch_model_config(target_dir, n_mels=n_mels)
         return target_dir
 
     except subprocess.CalledProcessError as e:
         print(f"❌ Conversion failed with code {e.returncode}")
-        # Cleanup
         if os.path.exists(target_dir):
             import shutil
-
             shutil.rmtree(target_dir)
-        # Fallback to original name (will likely fail, but we tried)
         return model_name
     except Exception as e:
         print(f"❌ Conversion error: {str(e)}")
@@ -167,65 +220,38 @@ class WhisperTranscriber:
         )
         print("✅ Model loaded successfully")
 
-        # ---------------------------------------------------------------
-        # Fix n_mels mismatch for Whisper v3 models.
-        #
-        # Root cause: faster-whisper's WhisperFeatureExtractor uses the
-        # attribute name `feature_size` (NOT `n_mels`) to store mel bin
-        # count. Older versions default to feature_size=80 regardless of
-        # the model, causing shape (1,80,3000) when v3 needs (1,128,3000).
-        #
-        # We read `feature_size` (with `mel_filters.shape[0]` as fallback)
-        # and replace the FeatureExtractor instance when wrong.
-        # ---------------------------------------------------------------
+        # Verify that the FeatureExtractor was initialised with the correct
+        # number of mel bins. The real fix lives in _patch_model_config() which
+        # writes n_mels into the model's config.json BEFORE WhisperModel loads
+        # it — so faster-whisper reads the right value from the start.
         is_v3_model = "v3" in model_size.lower()
         expected_n_mels = 128 if is_v3_model else 80
         fe = getattr(self.model, "feature_extractor", None)
-
-        # Determine actual mel bins — try every known attribute name
         actual_n_mels = None
         if fe is not None:
             if hasattr(fe, "mel_filters") and fe.mel_filters is not None:
-                actual_n_mels = fe.mel_filters.shape[0]  # most reliable
+                actual_n_mels = int(fe.mel_filters.shape[0])
             elif hasattr(fe, "feature_size"):
-                actual_n_mels = fe.feature_size
+                actual_n_mels = int(fe.feature_size)
             elif hasattr(fe, "n_mels"):
-                actual_n_mels = fe.n_mels
+                actual_n_mels = int(fe.n_mels)
 
-        print(f"🔍 feature_extractor n_mels check: actual={actual_n_mels}, expected={expected_n_mels}")
-
-        if actual_n_mels is not None and actual_n_mels != expected_n_mels:
-            print(
-                f"⚠️  n_mels mismatch ({actual_n_mels} → {expected_n_mels}). "
-                f"Replacing FeatureExtractor..."
+        if actual_n_mels == expected_n_mels:
+            print(f"✅ FeatureExtractor n_mels verified: {actual_n_mels} bins")
+        elif actual_n_mels is not None:
+            # Config patch didn't take effect — raise immediately so the
+            # error is obvious rather than a cryptic shape mismatch later.
+            raise RuntimeError(
+                f"FeatureExtractor has {actual_n_mels} mel bins but model "
+                f"'{model_size}' requires {expected_n_mels}. "
+                f"Delete the cached model and rebuild:\n"
+                f"  docker compose down\n"
+                f"  docker volume rm whisper-models\n"
+                f"  docker compose build --no-cache\n"
+                f"  docker compose up -d"
             )
-            try:
-                from faster_whisper.feature_extractor import FeatureExtractor
-                self.model.feature_extractor = FeatureExtractor(
-                    feature_size=expected_n_mels
-                )
-                # Verify fix via mel_filters shape
-                new_fe = self.model.feature_extractor
-                verified = None
-                if hasattr(new_fe, "mel_filters") and new_fe.mel_filters is not None:
-                    verified = new_fe.mel_filters.shape[0]
-                elif hasattr(new_fe, "feature_size"):
-                    verified = new_fe.feature_size
-                if verified == expected_n_mels:
-                    print(f"✅ FeatureExtractor replaced successfully: {expected_n_mels} bins")
-                else:
-                    raise RuntimeError(
-                        f"FeatureExtractor replacement failed: got {verified} bins after fix"
-                    )
-            except Exception as fix_err:
-                raise RuntimeError(
-                    f"Cannot fix n_mels mismatch for '{model_size}': {fix_err}\n"
-                    f"Rebuild with: docker compose build --no-cache && docker compose up -d"
-                ) from fix_err
-        elif actual_n_mels == expected_n_mels:
-            print(f"✅ n_mels OK: {actual_n_mels} bins")
         else:
-            print(f"⚠️  Could not determine n_mels from feature_extractor — proceeding anyway")
+            print("⚠️  Could not verify FeatureExtractor n_mels — proceeding")
 
         # Load VAD if enabled
         self.vad = None
