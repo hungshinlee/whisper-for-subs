@@ -32,7 +32,6 @@ from youtube_downloader import (
 )
 from srt_utils import segments_to_srt, merge_segments
 from chinese_converter import convert_segments_to_traditional, get_converter
-from punctuation_utils import add_punctuation_to_segments
 from hakka_translator import (
     translate_segments,
     is_llm_enabled,
@@ -255,8 +254,6 @@ def process_audio(
     use_multi_gpu: bool,
     translate_hakka: bool = False,
     llm_system_prompt: str = "",
-    add_punctuation: bool = False,
-    gap_threshold_s: float = 0.3,
 ) -> Generator[Tuple[str, str, Optional[str]], None, None]:
     session_id = uuid.uuid4().hex[:12]
     session_dir = os.path.join("/tmp/whisper-sessions", session_id)
@@ -409,20 +406,11 @@ def process_audio(
         if language == "zh" and convert_to_traditional:
             converter = get_converter()
             if converter.is_available():
-                yield (format_progress_html(87, "Converting to Traditional Chinese..."), "", None)
+                yield (format_progress_html(88, "Converting to Traditional Chinese..."), "", None)
                 segments = convert_segments_to_traditional(segments)
                 print("✅ Converted to Traditional Chinese")
             else:
                 print("⚠️  Chinese converter not available, skipping conversion")
-
-        # Add punctuation using word-level pause timings
-        if add_punctuation:
-            yield (
-                format_progress_html(88, f"Adding punctuation (gap ≥ {gap_threshold_s:.2f}s)..."),
-                "", None,
-            )
-            segments = add_punctuation_to_segments(segments, gap_threshold_s=gap_threshold_s)
-            print(f"✅ Punctuation added (gap_threshold={gap_threshold_s:.2f}s)")
 
         # Merge segments if requested
         if merge_subtitles:
@@ -603,14 +591,9 @@ def create_interface() -> gr.Blocks:
                     use_vad_checkbox = gr.Checkbox(value=True, label="Enable VAD")
                     merge_checkbox = gr.Checkbox(value=True, label="Merge Short Subtitles")
                     zh_conv_checkbox = gr.Checkbox(value=False, label="Convert to zh-TW")
-                    add_punctuation_checkbox = gr.Checkbox(
-                        value=False,
-                        label="Add Punctuation (，。)",
-                        info="在每個字幕結尾加上句號，並在停頓處插入逗號",
-                    )
 
                 # ── LLM controls — wrapped in a Column so visibility is
-                #    controlled at the container level.  This avoids Gradio's
+                #    controlled at the container level. This avoids Gradio's
                 #    unreliable event handling on hidden Checkbox components.
                 with gr.Column(visible=False) as llm_col:
                     translate_hakka_checkbox = gr.Checkbox(
@@ -619,7 +602,6 @@ def create_interface() -> gr.Blocks:
                         interactive=LLM_ENABLED,
                         info=None if LLM_ENABLED else "LLM not deployed (ENABLE_LLM=false)",
                     )
-                    # Prompt box — visible only when translate checkbox is checked
                     llm_prompt_textbox = gr.Textbox(
                         value=DEFAULT_SYSTEM_PROMPT,
                         label="🤖 LLM System Prompt",
@@ -632,13 +614,6 @@ def create_interface() -> gr.Blocks:
                     minimum=0.01, maximum=2.0, value=0.1, step=0.01,
                     label="VAD: Minimum Silence Duration (seconds)",
                     visible=True,
-                )
-
-                gap_threshold_slider = gr.Slider(
-                    minimum=0.1, maximum=1.0, value=0.3, step=0.05,
-                    label="Punctuation: Comma Gap Threshold (seconds)",
-                    info="停頓超過此時間即插入逗號（數值越小＝逗號越多）",
-                    visible=False,
                 )
 
                 multi_gpu_checkbox = gr.Checkbox(
@@ -690,8 +665,6 @@ def create_interface() -> gr.Blocks:
                 multi_gpu_checkbox,
                 translate_hakka_checkbox,
                 llm_prompt_textbox,
-                add_punctuation_checkbox,
-                gap_threshold_slider,
             ],
             outputs=[status_text, srt_output, srt_file],
         )
@@ -714,10 +687,9 @@ def create_interface() -> gr.Blocks:
                 info="Note: large-v3-turbo only supports Transcribe",
             ) if model_name == "large-v3-turbo" else gr.update(interactive=True, info=None)
 
-            # Show/hide the whole LLM column; reset checkbox & prompt on every model switch
-            llm_col_update       = gr.update(visible=is_hakka)
-            checkbox_reset       = gr.update(value=False)
-            prompt_hide          = gr.update(visible=False)
+            llm_col_update = gr.update(visible=is_hakka)
+            checkbox_reset = gr.update(value=False)
+            prompt_hide    = gr.update(visible=False)
 
             return language_update, task_update, llm_col_update, checkbox_reset, prompt_hide
 
@@ -727,16 +699,12 @@ def create_interface() -> gr.Blocks:
             outputs=[language_radio, task_radio, llm_col, translate_hakka_checkbox, llm_prompt_textbox],
         )
 
-        # Show/hide LLM prompt when translate checkbox is toggled.
-        # Because translate_hakka_checkbox is always visible inside llm_col,
-        # this .change event fires reliably.
         translate_hakka_checkbox.change(
             fn=lambda checked: gr.update(visible=checked),
             inputs=[translate_hakka_checkbox],
             outputs=[llm_prompt_textbox],
         )
 
-        # Clear YouTube when audio uploaded and vice versa
         audio_input.change(
             fn=lambda x: "" if x else gr.update(),
             inputs=[audio_input],
@@ -748,7 +716,6 @@ def create_interface() -> gr.Blocks:
             outputs=[audio_input],
         )
 
-        # Toggle dependent sliders
         merge_checkbox.change(
             fn=lambda x: gr.update(visible=x),
             inputs=[merge_checkbox],
@@ -758,11 +725,6 @@ def create_interface() -> gr.Blocks:
             fn=lambda x: gr.update(visible=x),
             inputs=[use_vad_checkbox],
             outputs=[min_silence_slider],
-        )
-        add_punctuation_checkbox.change(
-            fn=lambda x: gr.update(visible=x),
-            inputs=[add_punctuation_checkbox],
-            outputs=[gap_threshold_slider],
         )
 
         copy_btn.click(

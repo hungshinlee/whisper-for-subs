@@ -124,17 +124,28 @@ def merge_segments(
     segments: List[dict],
     max_chars: int = 80,
     max_duration: float = 5.0,
+    gap_merge_threshold: float = 0.05,
 ) -> List[dict]:
     """
     Merge short segments for better readability.
-    
+
+    Two segments are always merged when there is no audible gap between them
+    (gap <= gap_merge_threshold), regardless of max_chars / max_duration.
+    This prevents split artifacts like a lone trailing word ("一下。") being
+    emitted as a separate subtitle when Whisper happens to cut there.
+
+    For segments with a real gap, the normal limits apply:
+    - combined text must not exceed max_chars
+    - combined duration must not exceed max_duration
+
     Args:
-        segments: List of segments with 'start', 'end', 'text'
-        max_chars: Maximum characters per subtitle
-        max_duration: Maximum duration per subtitle
-        
+        segments:            List of segments with 'start', 'end', 'text'.
+        max_chars:           Maximum characters per subtitle (gapped merges only).
+        max_duration:        Maximum duration per subtitle in seconds (gapped merges only).
+        gap_merge_threshold: Gaps ≤ this value (seconds) are treated as zero.
+
     Returns:
-        Merged segments
+        Merged segments.
     """
     if not segments:
         return []
@@ -148,11 +159,16 @@ def merge_segments(
     
     for seg in segments[1:]:
         text = seg["text"].strip()
-        combined_text = current["text"] + " " + text
+        combined_text = current["text"] + text
         combined_duration = seg["end"] - current["start"]
-        
-        # Merge if within limits
-        if len(combined_text) <= max_chars and combined_duration <= max_duration:
+        gap = seg["start"] - current["end"]
+
+        if gap <= gap_merge_threshold:
+            # No audible gap — always merge to avoid split artifacts
+            current["end"] = seg["end"]
+            current["text"] = combined_text
+        elif len(combined_text) <= max_chars and combined_duration <= max_duration:
+            # Normal merge within limits
             current["end"] = seg["end"]
             current["text"] = combined_text
         else:

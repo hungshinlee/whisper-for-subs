@@ -13,20 +13,19 @@ from typing import List, Dict, Optional
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
 
-# Timeout for a single translation batch request.
-# gemma3:12b cold-load on a 2080 Ti can take 60–120 s on first inference;
-# subsequent calls are much faster once the model is warm in VRAM.
+# Timeout per line. Line-by-line mode means each call is short,
+# but first call on a cold model can still be slow.
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "300"))  # seconds
 
 # Default system prompt — also used as the UI placeholder / default value
 DEFAULT_SYSTEM_PROMPT = (
     "你是一位專業的客語翻譯員。"
-    "使用者會提供客語漢字字幕，請將每一句翻譯成自然流暢的繁體中文（台灣用語）。"
+    "使用者會提供一句客語漢字字幕，請將它翻譯成自然流暢的繁體中文（台灣用語）。"
     "規則：\n"
     "1. 只輸出翻譯結果，不要解釋、不要加注音或標點以外的任何內容。\n"
     "2. 保持與原文相近的句子長度。\n"
     "3. 若原文已是繁體中文，則原文照傳回。\n"
-    "4. 一行輸入對應一行輸出，行數必須相同。"
+    "4. 只輸出一行。"
 )
 
 
@@ -58,21 +57,21 @@ def check_ollama_available() -> bool:
         return False
 
 
-def _call_ollama(system_prompt: str, user_content: str) -> Optional[str]:
+def _translate_one(text: str, system_prompt: str) -> Optional[str]:
     """
-    Single raw call to Ollama chat API.
-    Returns the assistant's reply string, or None on failure.
+    Translate a single line. Returns the translated string, or None on failure.
+    Only the first non-empty line of the reply is used to avoid stray commentary.
     """
     payload = {
         "model": OLLAMA_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_content},
+            {"role": "user",   "content": text},
         ],
         "stream": False,
         "options": {
             "temperature": 0.1,
-            "num_predict": 512,
+            "num_predict": 256,
         },
     }
     try:
@@ -82,80 +81,33 @@ def _call_ollama(system_prompt: str, user_content: str) -> Optional[str]:
             timeout=OLLAMA_TIMEOUT,
         )
         resp.raise_for_status()
-        return resp.json()["message"]["content"].strip()
+        reply = resp.json()["message"]["content"].strip()
+        # Take only the first non-empty line
+        first_line = next(
+            (l.strip() for l in reply.splitlines() if l.strip()),
+            None,
+        )
+        return first_line if first_line else None
     except Exception as e:
         print(f"❌ Ollama call error: {e}")
         return None
 
 
-def _translate_batch(
-    texts: List[str],
-    system_prompt: str,
-) -> Optional[List[str]]:
-    """
-    Translate a batch of lines.
-
-    Strategy:
-    1. Send all lines at once (fast path).
-    2. If the LLM returns the wrong number of lines, fall back to
-       translating each line individually (slow but reliable).
-
-    Returns a list of translated lines the same length as `texts`,
-    or None if every attempt fails.
-    """
-    if not texts:
-        return []
-
-    # ── Fast path: batch ──────────────────────────────────────────────
-    user_content = "\n".join(texts)
-    reply = _call_ollama(system_prompt, user_content)
-
-    if reply is not None:
-        lines = reply.splitlines()
-        if len(lines) == len(texts):
-            return lines                        # ✅ perfect match
-
-        print(
-            f"⚠️  Batch line count mismatch: sent {len(texts)}, got {len(lines)}. "
-            f"Retrying line-by-line..."
-        )
-
-    # ── Slow path: one line at a time ─────────────────────────────────
-    results: List[Optional[str]] = []
-    for i, text in enumerate(texts):
-        single_reply = _call_ollama(system_prompt, text)
-        if single_reply is not None:
-            # Take only the first non-empty line to avoid stray commentary
-            first_line = next(
-                (l.strip() for l in single_reply.splitlines() if l.strip()),
-                None,
-            )
-            results.append(first_line if first_line else text)
-        else:
-            print(f"⚠️  Line {i + 1} translation failed — keeping original")
-            results.append(text)        # fallback to original for this line
-
-    # If every single line kept its original, treat the whole batch as failed
-    if results == list(texts):
-        return None
-
-    return results
-
-
 def translate_segments(
     segments: List[Dict],
     system_prompt: Optional[str] = None,
-    batch_size: int = 20,
+    batch_size: int = 20,       # kept for API compatibility, not used
     progress_callback=None,
 ) -> List[Dict]:
     """
-    Translate all segment texts from Hakka to Traditional Mandarin.
+    Translate all segment texts from Hakka to Traditional Mandarin,
+    one line at a time for maximum reliability.
 
     Args:
         segments:          List of segment dicts with 'start', 'end', 'text'.
         system_prompt:     Custom system prompt; falls back to DEFAULT_SYSTEM_PROMPT
                            when None or empty.
-        batch_size:        Number of lines per LLM call (default 20).
+        batch_size:        Unused (kept for backwards compatibility).
         progress_callback: Optional callback(percent, message).
 
     Returns:
@@ -176,35 +128,32 @@ def translate_segments(
     if effective_prompt != DEFAULT_SYSTEM_PROMPT:
         print("ℹ️  Using custom system prompt")
 
+    total = len(segments)
     print(
         f"🈯 Starting Hakka → Mandarin translation "
-        f"({len(segments)} segments, timeout={OLLAMA_TIMEOUT}s)..."
+        f"({total} segments, line-by-line, timeout={OLLAMA_TIMEOUT}s/line)..."
     )
 
     translated_segments = [seg.copy() for seg in segments]
-    total_batches = (len(segments) + batch_size - 1) // batch_size
 
-    for batch_idx in range(total_batches):
-        start = batch_idx * batch_size
-        end   = min(start + batch_size, len(segments))
-        batch_texts = [seg["text"].strip() for seg in segments[start:end]]
-
+    for i, seg in enumerate(segments):
         if progress_callback:
-            pct = int((batch_idx / total_batches) * 100)
-            progress_callback(pct, f"Translating batch {batch_idx + 1}/{total_batches}...")
+            pct = int((i / total) * 100)
+            progress_callback(pct, f"Translating segment {i + 1}/{total}...")
 
-        translated = _translate_batch(batch_texts, system_prompt=effective_prompt)
+        text = seg["text"].strip()
+        result = _translate_one(text, effective_prompt)
 
-        if translated is not None:
-            for i, text in enumerate(translated):
-                translated_segments[start + i]["text"] = text
+        if result is not None:
+            translated_segments[i]["text"] = result
+            print(f"  [{i + 1}/{total}] {text!r} → {result!r}")
         else:
-            print(f"⚠️  Batch {batch_idx + 1} translation failed entirely — keeping original")
+            print(f"  [{i + 1}/{total}] ⚠️  failed — keeping original: {text!r}")
 
     if progress_callback:
         progress_callback(100, "Translation complete")
 
-    print(f"✅ Translation complete: {len(translated_segments)} segments")
+    print(f"✅ Translation complete: {total} segments")
     return translated_segments
 
 
