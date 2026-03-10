@@ -16,7 +16,6 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
 # Timeout for a single translation batch request.
 # gemma3:12b cold-load on a 2080 Ti can take 60–120 s on first inference;
 # subsequent calls are much faster once the model is warm in VRAM.
-# Set generously to avoid spurious timeouts on large batches.
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "300"))  # seconds
 
 # Default system prompt — also used as the UI placeholder / default value
@@ -59,30 +58,16 @@ def check_ollama_available() -> bool:
         return False
 
 
-def _translate_batch(
-    texts: List[str],
-    system_prompt: str,
-) -> Optional[List[str]]:
+def _call_ollama(system_prompt: str, user_content: str) -> Optional[str]:
     """
-    Send a batch of lines to Ollama for translation.
-
-    Args:
-        texts:         List of Hakka text lines.
-        system_prompt: System prompt to use for this request.
-
-    Returns:
-        List of translated lines, or None on failure.
+    Single raw call to Ollama chat API.
+    Returns the assistant's reply string, or None on failure.
     """
-    if not texts:
-        return []
-
-    user_content = "\n".join(texts)
-
     payload = {
         "model": OLLAMA_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
+            {"role": "user",   "content": user_content},
         ],
         "stream": False,
         "options": {
@@ -90,7 +75,6 @@ def _translate_batch(
             "num_predict": 512,
         },
     }
-
     try:
         resp = requests.post(
             f"{OLLAMA_HOST}/api/chat",
@@ -98,23 +82,64 @@ def _translate_batch(
             timeout=OLLAMA_TIMEOUT,
         )
         resp.raise_for_status()
-        result = resp.json()
-        translated_text = result["message"]["content"].strip()
-        translated_lines = translated_text.splitlines()
-
-        if len(translated_lines) != len(texts):
-            print(
-                f"⚠️  Translation line count mismatch: "
-                f"sent {len(texts)}, got {len(translated_lines)}. "
-                f"Falling back to original text for this batch."
-            )
-            return None
-
-        return translated_lines
-
+        return resp.json()["message"]["content"].strip()
     except Exception as e:
-        print(f"❌ Ollama translation error: {e}")
+        print(f"❌ Ollama call error: {e}")
         return None
+
+
+def _translate_batch(
+    texts: List[str],
+    system_prompt: str,
+) -> Optional[List[str]]:
+    """
+    Translate a batch of lines.
+
+    Strategy:
+    1. Send all lines at once (fast path).
+    2. If the LLM returns the wrong number of lines, fall back to
+       translating each line individually (slow but reliable).
+
+    Returns a list of translated lines the same length as `texts`,
+    or None if every attempt fails.
+    """
+    if not texts:
+        return []
+
+    # ── Fast path: batch ──────────────────────────────────────────────
+    user_content = "\n".join(texts)
+    reply = _call_ollama(system_prompt, user_content)
+
+    if reply is not None:
+        lines = reply.splitlines()
+        if len(lines) == len(texts):
+            return lines                        # ✅ perfect match
+
+        print(
+            f"⚠️  Batch line count mismatch: sent {len(texts)}, got {len(lines)}. "
+            f"Retrying line-by-line..."
+        )
+
+    # ── Slow path: one line at a time ─────────────────────────────────
+    results: List[Optional[str]] = []
+    for i, text in enumerate(texts):
+        single_reply = _call_ollama(system_prompt, text)
+        if single_reply is not None:
+            # Take only the first non-empty line to avoid stray commentary
+            first_line = next(
+                (l.strip() for l in single_reply.splitlines() if l.strip()),
+                None,
+            )
+            results.append(first_line if first_line else text)
+        else:
+            print(f"⚠️  Line {i + 1} translation failed — keeping original")
+            results.append(text)        # fallback to original for this line
+
+    # If every single line kept its original, treat the whole batch as failed
+    if results == list(texts):
+        return None
+
+    return results
 
 
 def translate_segments(
@@ -127,10 +152,10 @@ def translate_segments(
     Translate all segment texts from Hakka to Traditional Mandarin.
 
     Args:
-        segments:       List of segment dicts with 'start', 'end', 'text'.
-        system_prompt:  Custom system prompt. Falls back to DEFAULT_SYSTEM_PROMPT
-                        when None or empty.
-        batch_size:     Number of lines per LLM call (default 20).
+        segments:          List of segment dicts with 'start', 'end', 'text'.
+        system_prompt:     Custom system prompt; falls back to DEFAULT_SYSTEM_PROMPT
+                           when None or empty.
+        batch_size:        Number of lines per LLM call (default 20).
         progress_callback: Optional callback(percent, message).
 
     Returns:
@@ -151,14 +176,17 @@ def translate_segments(
     if effective_prompt != DEFAULT_SYSTEM_PROMPT:
         print("ℹ️  Using custom system prompt")
 
-    print(f"🈯 Starting Hakka → Mandarin translation ({len(segments)} segments, timeout={OLLAMA_TIMEOUT}s)...")
+    print(
+        f"🈯 Starting Hakka → Mandarin translation "
+        f"({len(segments)} segments, timeout={OLLAMA_TIMEOUT}s)..."
+    )
 
     translated_segments = [seg.copy() for seg in segments]
     total_batches = (len(segments) + batch_size - 1) // batch_size
 
     for batch_idx in range(total_batches):
         start = batch_idx * batch_size
-        end = min(start + batch_size, len(segments))
+        end   = min(start + batch_size, len(segments))
         batch_texts = [seg["text"].strip() for seg in segments[start:end]]
 
         if progress_callback:
@@ -171,7 +199,7 @@ def translate_segments(
             for i, text in enumerate(translated):
                 translated_segments[start + i]["text"] = text
         else:
-            print(f"⚠️  Batch {batch_idx + 1} translation failed — keeping original")
+            print(f"⚠️  Batch {batch_idx + 1} translation failed entirely — keeping original")
 
     if progress_callback:
         progress_callback(100, "Translation complete")
@@ -191,7 +219,7 @@ def pull_model_if_needed():
     try:
         resp = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=10)
         if resp.status_code != 200:
-            print(f"⚠️  Could not reach Ollama to check model status")
+            print("⚠️  Could not reach Ollama to check model status")
             return
 
         models = [m["name"] for m in resp.json().get("models", [])]
