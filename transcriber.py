@@ -36,7 +36,6 @@ def _patch_model_config(model_dir: str, n_mels: int) -> None:
         config_path = os.path.join(model_dir, filename)
 
         if not os.path.exists(config_path):
-            # Create a minimal stub so faster-whisper reads the correct value
             config = {}
         else:
             with open(config_path, "r", encoding="utf-8") as f:
@@ -66,7 +65,6 @@ def ensure_model_ready(model_name: str) -> str:
     Returns:
         Path to the usable model (CT2 format)
     """
-    # Map of models that need conversion -> (target directory name, n_mels)
     CUSTOM_MODELS = {
         "formospeech/whisper-large-v2-taiwanese-hakka-v1": (
             "whisper-large-v2-taiwanese-hakka-v1-ct2", 80,
@@ -77,12 +75,8 @@ def ensure_model_ready(model_name: str) -> str:
     }
 
     if model_name not in CUSTOM_MODELS:
-        # For built-in models (large-v3, large-v3-turbo etc.) patch their
-        # cached config so faster-whisper always reads the correct n_mels.
         is_v3 = "v3" in model_name.lower()
         if is_v3:
-            # faster-whisper caches downloaded CT2 models under:
-            # ~/.cache/huggingface/hub/models--Systran--faster-whisper-*/snapshots/*/
             import glob
             hf_cache = os.environ.get("HF_HOME", "/root/.cache/huggingface")
             pattern = os.path.join(
@@ -96,41 +90,32 @@ def ensure_model_ready(model_name: str) -> str:
 
     target_dirname, n_mels = CUSTOM_MODELS[model_name]
 
-    # Get cache directory
     cache_dir = os.environ.get("HF_HOME", "/root/.cache/huggingface")
     models_dir = os.path.join(cache_dir, "ct2_converted")
     target_dir = os.path.join(models_dir, target_dirname)
 
-    # Check if already converted
     if os.path.exists(os.path.join(target_dir, "model.bin")):
         print(f"✅ Found converted model at: {target_dir}")
-        # Always re-patch config in case it was overwritten
         _patch_model_config(target_dir, n_mels=n_mels)
         return target_dir
 
     print(f"⚠️  Model {model_name} needs conversion to CTranslate2 format.")
     print(f"   Converting to {target_dir}...")
 
-    # Ensure directory exists
     os.makedirs(target_dir, exist_ok=True)
 
     try:
         cmd = [
             "ct2-transformers-converter",
-            "--model",
-            model_name,
-            "--output_dir",
-            target_dir,
-            "--quantization",
-            "float16",
+            "--model", model_name,
+            "--output_dir", target_dir,
+            "--quantization", "float16",
             "--force",
         ]
-
         print(f"   Running: {' '.join(cmd)}")
         subprocess.check_call(cmd)
         print("✅ Conversion complete!")
 
-        # Patch config immediately after conversion
         _patch_model_config(target_dir, n_mels=n_mels)
         return target_dir
 
@@ -168,8 +153,28 @@ MODEL_CONFIGS = {
     },
 }
 
-# Model IDs list (for backward compatibility)
 MODEL_SIZES = list(MODEL_CONFIGS.keys())
+
+
+def _words_from_seg(seg, time_offset: float = 0.0) -> List[dict]:
+    """
+    Extract word-level timing from a faster-whisper segment object.
+
+    Returns a list of dicts with keys: word, start, end, probability.
+    Returns an empty list if the segment has no word data (word_timestamps
+    was not requested, or the model didn't produce alignment).
+    """
+    if not hasattr(seg, "words") or seg.words is None:
+        return []
+    return [
+        {
+            "word": w.word,
+            "start": time_offset + w.start,
+            "end": time_offset + w.end,
+            "probability": getattr(w, "probability", 1.0),
+        }
+        for w in seg.words
+    ]
 
 
 class WhisperTranscriber:
@@ -184,38 +189,23 @@ class WhisperTranscriber:
         vad_threshold: float = 0.5,
         min_silence_duration_ms: int = 100,
     ):
-        """
-        Initialize transcriber.
-
-        Args:
-            model_size: Whisper model size
-            device: Device to use (cuda/cpu)
-            compute_type: Compute type (float16/int8/float32)
-            use_vad: Whether to use VAD for segmentation
-            vad_threshold: VAD speech detection threshold
-            min_silence_duration_ms: Minimum silence duration in ms to split segments
-        """
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
         self.use_vad = use_vad
 
-        # Auto-detect device
         if device == "cuda" and not torch.cuda.is_available():
             print("CUDA not available, falling back to CPU")
             self.device = "cpu"
             self.compute_type = "float32"
 
-        # Determine GPU index for logging
         self.gpu_index = None
         if self.device == "cuda" and torch.cuda.is_available():
             self.gpu_index = torch.cuda.current_device()
             print(f"🎯 Single-GPU mode: Using GPU {self.gpu_index}")
 
-        # Load Whisper model
         print(f"Loading Whisper model: {model_size} on {self.device}")
 
-        # Ensure model is ready (convert if necessary)
         actual_model_path = ensure_model_ready(model_size)
         if actual_model_path != model_size:
             print(f"   Using converted model path: {actual_model_path}")
@@ -227,10 +217,7 @@ class WhisperTranscriber:
         )
         print("✅ Model loaded successfully")
 
-        # Verify that the FeatureExtractor was initialised with the correct
-        # number of mel bins. The real fix lives in _patch_model_config() which
-        # writes n_mels into the model's config files BEFORE WhisperModel loads
-        # it — so faster-whisper reads the right value from the start.
+        # Verify FeatureExtractor mel bins
         is_v3_model = "v3" in model_size.lower()
         expected_n_mels = 128 if is_v3_model else 80
         fe = getattr(self.model, "feature_extractor", None)
@@ -246,8 +233,6 @@ class WhisperTranscriber:
         if actual_n_mels == expected_n_mels:
             print(f"✅ FeatureExtractor n_mels verified: {actual_n_mels} bins")
         elif actual_n_mels is not None:
-            # Config patch didn't take effect — raise immediately so the
-            # error is obvious rather than a cryptic shape mismatch later.
             raise RuntimeError(
                 f"FeatureExtractor has {actual_n_mels} mel bins but model "
                 f"'{model_size}' requires {expected_n_mels}. "
@@ -260,7 +245,6 @@ class WhisperTranscriber:
         else:
             print("⚠️  Could not verify FeatureExtractor n_mels — proceeding")
 
-        # Load VAD if enabled
         self.vad = None
         if use_vad:
             print(
@@ -273,46 +257,25 @@ class WhisperTranscriber:
             print("✅ VAD loaded successfully")
 
     def load_audio(self, file_path: str, sample_rate: int = 16000) -> np.ndarray:
-        """
-        Load audio file and convert to proper format.
-
-        Args:
-            file_path: Path to audio/video file
-            sample_rate: Target sample rate
-
-        Returns:
-            Audio array (mono, float32)
-        """
-        # Create temp file for converted audio
+        """Load audio file and convert to proper format."""
         temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         temp_wav.close()
 
         try:
-            # Use ffmpeg to convert to WAV
             cmd = [
-                "ffmpeg",
-                "-i",
-                file_path,
-                "-ar",
-                str(sample_rate),
-                "-ac",
-                "1",
-                "-f",
-                "wav",
-                "-y",
-                temp_wav.name,
+                "ffmpeg", "-i", file_path,
+                "-ar", str(sample_rate),
+                "-ac", "1",
+                "-f", "wav",
+                "-y", temp_wav.name,
             ]
             subprocess.run(cmd, capture_output=True, check=True)
 
-            # Load with soundfile
             import soundfile as sf
-
             audio, sr = sf.read(temp_wav.name, dtype="float32")
-
             return audio
 
         finally:
-            # Cleanup temp file
             if os.path.exists(temp_wav.name):
                 os.unlink(temp_wav.name)
 
@@ -322,22 +285,15 @@ class WhisperTranscriber:
         language: Optional[str] = None,
         task: str = "transcribe",
         initial_prompt: Optional[str] = None,
-        word_timestamps: bool = False,
+        word_timestamps: bool = True,
         progress_callback=None,
     ) -> List[dict]:
         """
         Transcribe audio file.
 
-        Args:
-            audio_path: Path to audio file
-            language: Source language code (None for auto-detect)
-            task: "transcribe" or "translate"
-            initial_prompt: Initial prompt to guide transcription
-            word_timestamps: Whether to include word-level timestamps
-            progress_callback: Callback function(progress, status)
-
         Returns:
-            List of segments with start, end, text
+            List of segments with start, end, text, and words (word-level timing).
+            Each word is a dict: {word, start, end, probability}.
         """
         import time
 
@@ -346,39 +302,27 @@ class WhisperTranscriber:
         if progress_callback:
             progress_callback(0, "Loading audio...")
 
-        # Load audio
         audio = self.load_audio(audio_path)
-        duration = len(audio) / 16000  # seconds
+        duration = len(audio) / 16000
 
         print(f"📊 Audio loaded: {duration:.1f}s ({len(audio)} samples @ 16000Hz)")
 
         if progress_callback:
             progress_callback(5, f"Audio duration: {duration:.1f} seconds")
 
-        # Use VAD for segmentation if enabled
         if self.use_vad and self.vad is not None:
             if progress_callback:
                 progress_callback(10, "Detecting speech segments with VAD...")
             segments = self._transcribe_with_vad(
-                audio,
-                duration,
-                language,
-                task,
-                initial_prompt,
-                word_timestamps,
+                audio, duration, language, task, initial_prompt, word_timestamps,
                 progress_callback,
             )
         else:
             segments = self._transcribe_direct(
-                audio_path,
-                language,
-                task,
-                initial_prompt,
-                word_timestamps,
+                audio_path, language, task, initial_prompt, word_timestamps,
                 progress_callback,
             )
 
-        # Print summary
         elapsed = time.time() - start_time
         speed_ratio = duration / elapsed if elapsed > 0 else 0
         gpu_info = f"GPU {self.gpu_index}" if self.gpu_index is not None else "CPU"
@@ -403,7 +347,6 @@ class WhisperTranscriber:
         progress_callback=None,
     ) -> List[dict]:
         """Transcribe using VAD segmentation."""
-        # Get speech segments
         chunks = self.vad.segment_audio(
             audio,
             merge=True,
@@ -425,47 +368,43 @@ class WhisperTranscriber:
         segments = []
         gpu_label = f"GPU {self.gpu_index}" if self.gpu_index is not None else "CPU"
 
-        for i, (start_time, end_time, chunk_audio) in enumerate(chunks):
-            chunk_duration = end_time - start_time
+        for i, (chunk_start, chunk_end, chunk_audio) in enumerate(chunks):
+            chunk_duration = chunk_end - chunk_start
             print(
                 f"[{gpu_label}] ▶ Processing chunk {i + 1}/{len(chunks)} ({chunk_duration:.1f}s)"
             )
 
-            # Update progress
             progress = 15 + (i / len(chunks)) * 80
             if progress_callback:
                 progress_callback(progress, f"Transcribing ({i + 1}/{len(chunks)})...")
 
-            # Save chunk to temp file for transcription
             temp_chunk = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             temp_chunk.close()
 
             try:
                 import soundfile as sf
-
                 sf.write(temp_chunk.name, chunk_audio, 16000)
 
-                # Transcribe chunk
                 result, info = self.model.transcribe(
                     temp_chunk.name,
                     language=language if language != "auto" else None,
                     task=task,
                     initial_prompt=initial_prompt,
                     word_timestamps=word_timestamps,
-                    vad_filter=False,  # We already did VAD
+                    vad_filter=False,  # VAD already done above
                 )
 
-                # Collect segments with adjusted timestamps
                 chunk_segments = []
                 for seg in result:
-                    chunk_segments.append(
-                        {
-                            "start": start_time + seg.start,
-                            "end": start_time + seg.end,
-                            "text": seg.text,
-                        }
-                    )
-                    segments.append(chunk_segments[-1])
+                    seg_dict = {
+                        "start": chunk_start + seg.start,
+                        "end": chunk_start + seg.end,
+                        "text": seg.text,
+                        # word-level timing with global timestamp offset applied
+                        "words": _words_from_seg(seg, time_offset=chunk_start),
+                    }
+                    chunk_segments.append(seg_dict)
+                    segments.append(seg_dict)
 
                 print(
                     f"[{gpu_label}] ✓ Chunk {i + 1} complete: {len(chunk_segments)} text segments"
@@ -512,16 +451,15 @@ class WhisperTranscriber:
 
         segments = []
         for seg in result:
-            segments.append(
-                {
-                    "start": seg.start,
-                    "end": seg.end,
-                    "text": seg.text,
-                }
-            )
+            segments.append({
+                "start": seg.start,
+                "end": seg.end,
+                "text": seg.text,
+                # word-level timing; no offset needed (already absolute)
+                "words": _words_from_seg(seg, time_offset=0.0),
+            })
 
             if progress_callback:
-                # Estimate progress based on timestamp
                 if info.duration > 0:
                     progress = 20 + (seg.end / info.duration) * 75
                     progress_callback(progress, f"Transcribing... {seg.end:.1f}s")
@@ -537,12 +475,7 @@ class WhisperTranscriber:
         language: Optional[str] = None,
         task: str = "transcribe",
     ) -> Generator[dict, None, None]:
-        """
-        Transcribe audio with streaming output.
-
-        Yields:
-            Segment dictionaries as they are transcribed
-        """
+        """Transcribe audio with streaming output (no word timestamps)."""
         result, info = self.model.transcribe(
             audio_path,
             language=language if language != "auto" else None,
@@ -564,7 +497,7 @@ def get_available_devices() -> List[str]:
     if torch.cuda.is_available():
         for i in range(torch.cuda.device_count()):
             devices.append(f"cuda:{i}")
-        devices.insert(1, "cuda")  # Default CUDA device
+        devices.insert(1, "cuda")
     return devices
 
 
@@ -574,12 +507,10 @@ def get_gpu_info() -> List[dict]:
     if torch.cuda.is_available():
         for i in range(torch.cuda.device_count()):
             props = torch.cuda.get_device_properties(i)
-            info.append(
-                {
-                    "index": i,
-                    "name": props.name,
-                    "memory_total": props.total_memory / (1024**3),  # GB
-                    "memory_free": torch.cuda.memory_reserved(i) / (1024**3),
-                }
-            )
+            info.append({
+                "index": i,
+                "name": props.name,
+                "memory_total": props.total_memory / (1024**3),
+                "memory_free": torch.cuda.memory_reserved(i) / (1024**3),
+            })
     return info
