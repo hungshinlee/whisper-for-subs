@@ -169,9 +169,12 @@ class WhisperTranscriber:
 
         # Defensive n_mels check:
         # Whisper v3 models require 128 mel bins; v1/v2 models use 80.
-        # Some faster-whisper versions fail to detect this from model config
-        # (especially for 'large-v3-turbo' which was added after 1.0.0).
-        # We correct it explicitly to prevent shape mismatch errors.
+        # Older faster-whisper (< 1.1.0) fails to read n_mels from model config
+        # for 'large-v3-turbo', initialising FeatureExtractor with 80 bins.
+        # NOTE: setting .n_mels alone does NOT fix this — the mel filterbank
+        # matrix is pre-computed at __init__ time, so we must replace the
+        # entire FeatureExtractor instance with a new one using the correct
+        # feature_size.
         is_v3_model = "v3" in model_size.lower()
         expected_n_mels = 128 if is_v3_model else 80
         actual_n_mels = getattr(
@@ -179,11 +182,22 @@ class WhisperTranscriber:
         )
         if actual_n_mels is not None and actual_n_mels != expected_n_mels:
             print(
-                f"⚠️  n_mels mismatch detected: feature extractor has {actual_n_mels}, "
-                f"expected {expected_n_mels} for '{model_size}'. Correcting..."
+                f"⚠️  n_mels mismatch: FeatureExtractor has {actual_n_mels} bins, "
+                f"expected {expected_n_mels} for '{model_size}'. "
+                f"Reinitialising FeatureExtractor..."
             )
-            self.model.feature_extractor.n_mels = expected_n_mels
-            print(f"✅ n_mels corrected to {expected_n_mels}")
+            try:
+                from faster_whisper.feature_extractor import FeatureExtractor
+                self.model.feature_extractor = FeatureExtractor(
+                    feature_size=expected_n_mels
+                )
+                print(f"✅ FeatureExtractor replaced with {expected_n_mels} mel bins")
+            except Exception as fe_err:
+                print(f"❌ Failed to replace FeatureExtractor: {fe_err}")
+                print(
+                    "   Please rebuild the Docker image to get faster-whisper>=1.1.0 "
+                    "which natively supports large-v3-turbo."
+                )
         elif actual_n_mels is not None:
             print(f"✅ n_mels OK: {actual_n_mels} bins")
 
