@@ -26,8 +26,10 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python dependencies
+# NOTE: --no-cache-dir ensures requirements.txt changes always trigger a fresh install
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip show faster-whisper | grep Version
 
 # Download Silero VAD model during build
 RUN python -c "import torch; torch.hub.load('snakers4/silero-vad', 'silero_vad', force_reload=True)"
