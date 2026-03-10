@@ -18,34 +18,41 @@ from vad import SileroVAD
 
 def _patch_model_config(model_dir: str, n_mels: int) -> None:
     """
-    Ensure the CT2 model's config.json has the correct n_mels value.
+    Ensure the CT2 model's config files have the correct n_mels value.
 
-    This is the only reliable fix for the (1,80,3000) vs (1,128,3000) shape
-    mismatch: faster-whisper reads n_mels from config.json at WhisperModel
-    __init__ time to construct FeatureExtractor. If the value is wrong there,
-    no amount of post-load patching can fix it reliably across versions.
+    Patches both config.json and preprocessor_config.json because different
+    versions of faster-whisper / transformers read from different files to
+    construct the FeatureExtractor.  Patching both is safe and guarantees the
+    correct mel-bin count regardless of the library version in use.
     """
     import json
 
-    config_path = os.path.join(model_dir, "config.json")
-    if not os.path.exists(config_path):
-        # Create a minimal config so faster-whisper reads the correct n_mels
-        config = {}
-    else:
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
+    files_to_patch = {
+        "config.json": ["num_mel_bins", "n_mels"],
+        "preprocessor_config.json": ["num_mel_bins", "feature_size"],
+    }
 
-    if config.get("num_mel_bins") == n_mels and config.get("n_mels") == n_mels:
-        print(f"✅ config.json already has n_mels={n_mels}")
-        return
+    for filename, keys in files_to_patch.items():
+        config_path = os.path.join(model_dir, filename)
 
-    # faster-whisper checks both keys depending on version
-    config["num_mel_bins"] = n_mels
-    config["n_mels"] = n_mels
+        if not os.path.exists(config_path):
+            # Create a minimal stub so faster-whisper reads the correct value
+            config = {}
+        else:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
-    print(f"✅ Patched config.json: n_mels={n_mels} in {config_path}")
+        needs_patch = any(config.get(k) != n_mels for k in keys)
+        if not needs_patch:
+            print(f"✅ {filename} already has n_mels={n_mels}")
+            continue
+
+        for k in keys:
+            config[k] = n_mels
+
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+        print(f"✅ Patched {filename}: {keys} = {n_mels} in {model_dir}")
 
 
 def ensure_model_ready(model_name: str) -> str:
@@ -222,7 +229,7 @@ class WhisperTranscriber:
 
         # Verify that the FeatureExtractor was initialised with the correct
         # number of mel bins. The real fix lives in _patch_model_config() which
-        # writes n_mels into the model's config.json BEFORE WhisperModel loads
+        # writes n_mels into the model's config files BEFORE WhisperModel loads
         # it — so faster-whisper reads the right value from the start.
         is_v3_model = "v3" in model_size.lower()
         expected_n_mels = 128 if is_v3_model else 80
