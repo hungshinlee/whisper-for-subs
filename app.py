@@ -37,6 +37,7 @@ from hakka_translator import (
     translate_segments,
     is_llm_enabled,
     pull_model_if_needed,
+    DEFAULT_SYSTEM_PROMPT,
 )
 
 # Whether LLM translation is available in this deployment
@@ -262,6 +263,7 @@ def process_audio(
     max_chars: int,
     use_multi_gpu: bool,
     translate_hakka: bool = False,
+    llm_system_prompt: str = "",
     add_punctuation: bool = False,
     gap_threshold_s: float = 0.3,
 ) -> Generator[Tuple[str, str, Optional[str]], None, None]:
@@ -438,7 +440,10 @@ def process_audio(
                 "",
                 None,
             )
-            segments = translate_segments(segments)
+            segments = translate_segments(
+                segments,
+                system_prompt=llm_system_prompt,
+            )
             print("✅ Hakka translation complete")
         elif translate_hakka and not LLM_ENABLED:
             print("⚠️  LLM translation requested but ENABLE_LLM=false — skipping")
@@ -457,7 +462,7 @@ def process_audio(
             else:
                 print("⚠️  Chinese converter not available, skipping conversion")
 
-        # Add punctuation (，and 。) using word-level pause timings
+        # Add punctuation using word-level pause timings
         if add_punctuation:
             yield (
                 format_progress_html(88, f"Adding punctuation (gap ≥ {gap_threshold_s:.2f}s)..."),
@@ -686,6 +691,15 @@ def create_interface() -> gr.Blocks:
                     info=None if LLM_ENABLED else "LLM not deployed (ENABLE_LLM=false)",
                 )
 
+                # LLM system prompt — only shown when translate_hakka is checked
+                llm_prompt_textbox = gr.Textbox(
+                    value=DEFAULT_SYSTEM_PROMPT,
+                    label="🤖 LLM System Prompt",
+                    info="可自訂翻譯指令，留空則使用預設 Prompt",
+                    lines=6,
+                    visible=False,
+                )
+
                 min_silence_slider = gr.Slider(
                     minimum=0.01,
                     maximum=2.0,
@@ -765,6 +779,7 @@ def create_interface() -> gr.Blocks:
                 max_chars_slider,
                 multi_gpu_checkbox,
                 translate_hakka_checkbox,
+                llm_prompt_textbox,
                 add_punctuation_checkbox,
                 gap_threshold_slider,
             ],
@@ -798,14 +813,24 @@ def create_interface() -> gr.Blocks:
             else:
                 task_update = gr.update(interactive=True, info=None)
 
+            # Show LLM controls only for Hakka models
             translate_hakka_update = gr.update(visible=is_hakka, value=False)
+            # Hide prompt box when switching away from Hakka model
+            llm_prompt_update = gr.update(visible=False)
 
-            return language_update, task_update, translate_hakka_update
+            return language_update, task_update, translate_hakka_update, llm_prompt_update
 
         model_dropdown.change(
             fn=on_model_change,
             inputs=[model_dropdown],
-            outputs=[language_radio, task_radio, translate_hakka_checkbox],
+            outputs=[language_radio, task_radio, translate_hakka_checkbox, llm_prompt_textbox],
+        )
+
+        # Show/hide LLM prompt textbox together with translate checkbox
+        translate_hakka_checkbox.change(
+            fn=lambda checked: gr.update(visible=checked),
+            inputs=[translate_hakka_checkbox],
+            outputs=[llm_prompt_textbox],
         )
 
         # Clear YouTube when audio uploaded and vice versa

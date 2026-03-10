@@ -6,7 +6,6 @@ Only active when ENABLE_LLM=true is set in the environment.
 """
 
 import os
-import json
 import requests
 from typing import List, Dict, Optional
 
@@ -14,8 +13,8 @@ from typing import List, Dict, Optional
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
 
-# Translation prompt — concise and strict to keep LLM on task
-SYSTEM_PROMPT = (
+# Default system prompt — also used as the UI placeholder / default value
+DEFAULT_SYSTEM_PROMPT = (
     "你是一位專業的客語翻譯員。"
     "使用者會提供客語漢字字幕，請將每一句翻譯成自然流暢的繁體中文（台灣用語）。"
     "規則：\n"
@@ -41,7 +40,6 @@ def check_ollama_available() -> bool:
         if resp.status_code != 200:
             return False
         models = [m["name"] for m in resp.json().get("models", [])]
-        # Accept both "qwen2.5:7b" and "qwen2.5:7b-instruct" style names
         model_base = OLLAMA_MODEL.split(":")[0]
         available = any(model_base in m for m in models)
         if not available:
@@ -55,31 +53,34 @@ def check_ollama_available() -> bool:
         return False
 
 
-def _translate_batch(texts: List[str]) -> Optional[List[str]]:
+def _translate_batch(
+    texts: List[str],
+    system_prompt: str,
+) -> Optional[List[str]]:
     """
     Send a batch of lines to Ollama for translation.
 
     Args:
-        texts: List of Hakka text lines
+        texts:         List of Hakka text lines.
+        system_prompt: System prompt to use for this request.
 
     Returns:
-        List of translated lines, or None on failure
+        List of translated lines, or None on failure.
     """
     if not texts:
         return []
 
-    # Join lines with newline so LLM processes them in order
     user_content = "\n".join(texts)
 
     payload = {
         "model": OLLAMA_MODEL,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
         "stream": False,
         "options": {
-            "temperature": 0.1,   # Low temperature for consistent, deterministic output
+            "temperature": 0.1,
             "num_predict": 512,
         },
     }
@@ -95,7 +96,6 @@ def _translate_batch(texts: List[str]) -> Optional[List[str]]:
         translated_text = result["message"]["content"].strip()
         translated_lines = translated_text.splitlines()
 
-        # Sanity check: line count must match
         if len(translated_lines) != len(texts):
             print(
                 f"⚠️  Translation line count mismatch: "
@@ -113,22 +113,22 @@ def _translate_batch(texts: List[str]) -> Optional[List[str]]:
 
 def translate_segments(
     segments: List[Dict],
+    system_prompt: Optional[str] = None,
     batch_size: int = 20,
     progress_callback=None,
 ) -> List[Dict]:
     """
     Translate all segment texts from Hakka to Traditional Mandarin.
 
-    Processes segments in batches to avoid exceeding context limits.
-    Falls back to original text gracefully if translation fails.
-
     Args:
-        segments: List of segment dicts with 'start', 'end', 'text'
-        batch_size: Number of lines per LLM call (default 20)
-        progress_callback: Optional callback(percent, message)
+        segments:       List of segment dicts with 'start', 'end', 'text'.
+        system_prompt:  Custom system prompt. Falls back to DEFAULT_SYSTEM_PROMPT
+                        when None or empty.
+        batch_size:     Number of lines per LLM call (default 20).
+        progress_callback: Optional callback(percent, message).
 
     Returns:
-        List of segments with translated text
+        List of segments with translated text.
     """
     if not segments:
         return segments
@@ -140,6 +140,11 @@ def translate_segments(
     if not check_ollama_available():
         print("⚠️  Ollama unavailable — skipping translation, keeping original text")
         return segments
+
+    # Use custom prompt if provided and non-empty, else fall back to default
+    effective_prompt = (system_prompt or "").strip() or DEFAULT_SYSTEM_PROMPT
+    if effective_prompt != DEFAULT_SYSTEM_PROMPT:
+        print("ℹ️  Using custom system prompt")
 
     print(f"🈯 Starting Hakka → Mandarin translation ({len(segments)} segments)...")
 
@@ -155,13 +160,12 @@ def translate_segments(
             pct = int((batch_idx / total_batches) * 100)
             progress_callback(pct, f"Translating batch {batch_idx + 1}/{total_batches}...")
 
-        translated = _translate_batch(batch_texts)
+        translated = _translate_batch(batch_texts, system_prompt=effective_prompt)
 
         if translated is not None:
             for i, text in enumerate(translated):
                 translated_segments[start + i]["text"] = text
         else:
-            # Keep original text for this batch
             print(f"⚠️  Batch {batch_idx + 1} translation failed — keeping original")
 
     if progress_callback:
