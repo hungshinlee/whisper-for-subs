@@ -13,6 +13,12 @@ from typing import List, Dict, Optional
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
 
+# Timeout for a single translation batch request.
+# gemma3:12b cold-load on a 2080 Ti can take 60–120 s on first inference;
+# subsequent calls are much faster once the model is warm in VRAM.
+# Set generously to avoid spurious timeouts on large batches.
+OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "300"))  # seconds
+
 # Default system prompt — also used as the UI placeholder / default value
 DEFAULT_SYSTEM_PROMPT = (
     "你是一位專業的客語翻譯員。"
@@ -89,7 +95,7 @@ def _translate_batch(
         resp = requests.post(
             f"{OLLAMA_HOST}/api/chat",
             json=payload,
-            timeout=60,
+            timeout=OLLAMA_TIMEOUT,
         )
         resp.raise_for_status()
         result = resp.json()
@@ -141,12 +147,11 @@ def translate_segments(
         print("⚠️  Ollama unavailable — skipping translation, keeping original text")
         return segments
 
-    # Use custom prompt if provided and non-empty, else fall back to default
     effective_prompt = (system_prompt or "").strip() or DEFAULT_SYSTEM_PROMPT
     if effective_prompt != DEFAULT_SYSTEM_PROMPT:
         print("ℹ️  Using custom system prompt")
 
-    print(f"🈯 Starting Hakka → Mandarin translation ({len(segments)} segments)...")
+    print(f"🈯 Starting Hakka → Mandarin translation ({len(segments)} segments, timeout={OLLAMA_TIMEOUT}s)...")
 
     translated_segments = [seg.copy() for seg in segments]
     total_batches = (len(segments) + batch_size - 1) // batch_size
