@@ -106,7 +106,6 @@ class TranscriberPool:
         min_silence_duration_ms = int(min_silence_duration_s * 1000)
 
         with self.lock:
-            # Try to reuse an available transcriber with matching config
             for worker_id in self.available_single[:]:
                 trans = self.single_gpu_pool.get(worker_id)
                 if trans and trans.model_size == model_size:
@@ -114,7 +113,6 @@ class TranscriberPool:
                     print(f"♻️  Reusing single-GPU transcriber: {worker_id}")
                     return trans, worker_id
 
-            # Create new transcriber if under limit
             if len(self.single_gpu_pool) < self.max_workers:
                 worker_id = f"single_{uuid.uuid4().hex[:8]}"
 
@@ -134,14 +132,11 @@ class TranscriberPool:
                 print(f"✨ Created new single-GPU transcriber: {worker_id}")
                 return trans, worker_id
 
-            # If at limit, wait and reuse first available (FIFO)
-            # In practice, this should rarely happen with queue management
             print("⏳ Waiting for available transcriber...")
             if self.available_single:
                 worker_id = self.available_single.pop(0)
                 return self.single_gpu_pool[worker_id], worker_id
 
-            # Fallback: reuse any transcriber
             worker_id = list(self.single_gpu_pool.keys())[0]
             return self.single_gpu_pool[worker_id], worker_id
 
@@ -164,7 +159,6 @@ class TranscriberPool:
         min_silence_duration_ms = int(min_silence_duration_s * 1000)
 
         with self.lock:
-            # Try to reuse
             for worker_id in self.available_parallel[:]:
                 trans = self.parallel_gpu_pool.get(worker_id)
                 if trans and trans.model_size == model_size:
@@ -172,7 +166,6 @@ class TranscriberPool:
                     print(f"♻️  Reusing parallel transcriber: {worker_id}")
                     return trans, worker_id
 
-            # Create new
             worker_id = f"parallel_{uuid.uuid4().hex[:8]}"
 
             gpu_ids_str = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3")
@@ -208,7 +201,6 @@ def cleanup_old_files(max_age_hours: int = 24):
     """Clean up old temporary files and outputs."""
     now = datetime.now()
 
-    # Clean /tmp/whisper-downloads
     tmp_dir = "/tmp/whisper-downloads"
     if os.path.exists(tmp_dir):
         for f in glob.glob(os.path.join(tmp_dir, "*")):
@@ -222,7 +214,6 @@ def cleanup_old_files(max_age_hours: int = 24):
             except Exception:
                 pass
 
-    # Clean /app/outputs (keep files for 24 hours)
     output_dir = "/app/outputs"
     if os.path.exists(output_dir):
         for f in glob.glob(os.path.join(output_dir, "*.srt")):
@@ -233,7 +224,6 @@ def cleanup_old_files(max_age_hours: int = 24):
             except Exception:
                 pass
 
-    # Clean /tmp/whisper-sessions (session work directories)
     sessions_dir = "/tmp/whisper-sessions"
     if os.path.exists(sessions_dir):
         for session_dir in glob.glob(os.path.join(sessions_dir, "*")):
@@ -273,22 +263,18 @@ def process_audio(
     use_multi_gpu: bool,
     translate_hakka: bool = False,
     add_punctuation: bool = False,
+    gap_threshold_s: float = 0.3,
 ) -> Generator[Tuple[str, str, Optional[str]], None, None]:
     """
     Process audio from file or YouTube URL.
-    IMPROVED: Isolated session handling with comprehensive cleanup.
 
     Yields:
         Tuple of (status message, SRT content, SRT file path)
     """
-    # Create unique session ID for this request
     session_id = uuid.uuid4().hex[:12]
-
-    # Create session-specific work directory
     session_dir = os.path.join("/tmp/whisper-sessions", session_id)
     os.makedirs(session_dir, exist_ok=True)
 
-    # Record start time
     start_time = time.time()
 
     audio_path = None
@@ -303,7 +289,6 @@ def process_audio(
     print(f"{'=' * 60}\n")
 
     try:
-        # Determine input source and prepare audio
         if youtube_url and youtube_url.strip():
             if not is_youtube_url(youtube_url):
                 yield "❌ Invalid YouTube URL", "", None
@@ -319,7 +304,6 @@ def process_audio(
                     None,
                 )
 
-            # Download audio to session directory
             download_dir = os.path.join(session_dir, "downloads")
             os.makedirs(download_dir, exist_ok=True)
 
@@ -340,8 +324,6 @@ def process_audio(
             temp_files.append(audio_path)
 
         elif audio_file:
-            # Create a temporary copy of uploaded file in session directory
-            # This ensures isolation and proper cleanup
             upload_copy = os.path.join(
                 session_dir,
                 f"upload_{uuid.uuid4().hex[:8]}{os.path.splitext(audio_file)[1]}",
@@ -361,7 +343,6 @@ def process_audio(
             yield "❌ Please upload an audio file or enter a YouTube URL", "", None
             return
 
-        # Get audio duration
         try:
             audio_info = sf.info(audio_path)
             audio_duration = audio_info.duration
@@ -370,12 +351,10 @@ def process_audio(
             print(f"Warning: Could not get audio duration: {e}")
             audio_duration = 0.0
 
-        # Decide whether to use multi-GPU based on audio duration and user choice
-        use_parallel = use_multi_gpu and audio_duration >= 300  # 5+ minutes
+        use_parallel = use_multi_gpu and audio_duration >= 300
         num_gpus_used = 1
 
         if use_parallel:
-            # Multi-GPU parallel processing
             is_parallel = True
             yield (
                 format_progress_html(35, "Loading models on multiple GPUs..."),
@@ -398,7 +377,7 @@ def process_audio(
             print(f"🚀 Using parallel transcriber: {worker_id} ({num_gpus_used} GPUs)")
 
             def transcribe_progress(pct, msg):
-                pass  # Progress handled internally
+                pass
 
             segments = para_trans.transcribe_parallel(
                 audio_path,
@@ -407,7 +386,6 @@ def process_audio(
                 progress_callback=transcribe_progress,
             )
         else:
-            # Single GPU processing
             is_parallel = False
             yield (
                 format_progress_html(35, "Loading Whisper model on GPU 0..."),
@@ -428,7 +406,6 @@ def process_audio(
             )
             print(f"🔧 Using single-GPU transcriber: {worker_id}")
 
-            # Transcribe with progress updates
             last_progress = [40]
 
             def transcribe_progress(pct, msg):
@@ -480,15 +457,18 @@ def process_audio(
             else:
                 print("⚠️  Chinese converter not available, skipping conversion")
 
-        # Add punctuation (，and 。) if requested
+        # Add punctuation (，and 。) using word-level pause timings
         if add_punctuation:
             yield (
-                format_progress_html(88, "Adding punctuation marks..."),
+                format_progress_html(88, f"Adding punctuation (gap ≥ {gap_threshold_s:.2f}s)..."),
                 "",
                 None,
             )
-            segments = add_punctuation_to_segments(segments)
-            print("✅ Punctuation added")
+            segments = add_punctuation_to_segments(
+                segments,
+                gap_threshold_s=gap_threshold_s,
+            )
+            print(f"✅ Punctuation added (gap_threshold={gap_threshold_s:.2f}s)")
 
         # Merge segments if requested
         if merge_subtitles:
@@ -501,13 +481,11 @@ def process_audio(
         yield format_progress_html(95, "Generating SRT file..."), "", None
         srt_content = segments_to_srt(segments)
 
-        # Save SRT file with UUID to prevent conflicts
         output_dir = (
             "/app/outputs" if os.path.exists("/app/outputs") else tempfile.gettempdir()
         )
         os.makedirs(output_dir, exist_ok=True)
 
-        # Clean filename and add UUID for uniqueness
         safe_title = "".join(
             c for c in video_title if c.isalnum() or c in " -_"
         ).strip()[:40]
@@ -521,23 +499,17 @@ def process_audio(
 
         print(f"💾 SRT saved: {srt_path}")
 
-        # Calculate processing time
         processing_time = time.time() - start_time
 
-        # Format status message
         gpu_info = f"{num_gpus_used} GPUs" if use_parallel else "GPU 0 (single)"
         status_parts = [
             f"✅ Transcription complete! {len(segments)} subtitle segments generated.\n"
         ]
-
         status_parts.append(f"Session: {session_id}")
         status_parts.append(f"Mode: {gpu_info}")
-
         if audio_duration > 0:
             status_parts.append(f"Audio duration: {audio_duration:.1f}s")
-
         status_parts.append(f"Processing time: {processing_time:.1f}s")
-
         if audio_duration > 0 and processing_time > 0:
             speed_ratio = audio_duration / processing_time
             status_parts.append(f"Speed: {speed_ratio:.2f}x realtime")
@@ -553,21 +525,18 @@ def process_audio(
 
     except Exception as e:
         import traceback
-
         traceback.print_exc()
         print(f"\n❌ Session failed: {session_id}")
         print(f"Error: {str(e)}\n")
         yield f"❌ Error in session {session_id}: {str(e)}", "", None
 
     finally:
-        # Release transcriber back to pool
         if worker_id:
             if is_parallel:
                 transcriber_pool.release_parallel_transcriber(worker_id)
             else:
                 transcriber_pool.release_single_gpu_transcriber(worker_id)
 
-        # Cleanup all temporary files
         for f in temp_files:
             if f and os.path.exists(f):
                 try:
@@ -576,7 +545,6 @@ def process_audio(
                 except Exception as e:
                     print(f"⚠️  Failed to clean {f}: {e}")
 
-        # Cleanup session directory
         if os.path.exists(session_dir):
             try:
                 shutil.rmtree(session_dir)
@@ -608,7 +576,6 @@ def create_interface() -> gr.Blocks:
             """
         )
 
-        # Terms and Privacy PDF - Simple link
         pdf_filename = "Terms_and_Privacy.pdf"
         pdf_path = (
             f"/app/docs/{pdf_filename}"
@@ -650,15 +617,12 @@ def create_interface() -> gr.Blocks:
                     label="Model",
                 )
 
-                # Check default model to set initial language and task state
                 default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 
-                # Determine language constraints based on model
                 if any(m in default_model for m in [
                     "formospeech/whisper-large-v2-taiwanese-hakka-v1",
                     "formospeech/whisper-large-v3-taiwanese-hakka",
                 ]):
-                    # Formospeech models only support Mandarin
                     language_interactive = False
                     language_value = "zh"
                     language_info = "Note: This model only supports Mandarin"
@@ -678,7 +642,6 @@ def create_interface() -> gr.Blocks:
                         info=language_info,
                     )
 
-                # Check task constraints based on model
                 task_interactive = default_model != "large-v3-turbo"
 
                 with gr.Row():
@@ -711,14 +674,14 @@ def create_interface() -> gr.Blocks:
                     add_punctuation_checkbox = gr.Checkbox(
                         value=False,
                         label="Add Punctuation (，。)",
-                        info="在每個字幕結尾加上句號，長句內自動插入逗號",
+                        info="在每個字幕結尾加上句號，並在停頓處插入逗號",
                     )
 
                 # LLM translation toggle — only shown for Hakka models + LLM enabled
                 translate_hakka_checkbox = gr.Checkbox(
                     value=False,
                     label="🤖 Translate Hakka → Mandarin (via Ollama LLM)",
-                    visible=False,  # shown dynamically when a Hakka model is selected
+                    visible=False,
                     interactive=LLM_ENABLED,
                     info=None if LLM_ENABLED else "LLM not deployed (ENABLE_LLM=false)",
                 )
@@ -730,6 +693,17 @@ def create_interface() -> gr.Blocks:
                     step=0.01,
                     label="VAD: Minimum Silence Duration (seconds)",
                     visible=True,
+                )
+
+                # Punctuation gap threshold — only shown when Add Punctuation is checked
+                gap_threshold_slider = gr.Slider(
+                    minimum=0.1,
+                    maximum=1.0,
+                    value=0.3,
+                    step=0.05,
+                    label="Punctuation: Comma Gap Threshold (seconds)",
+                    info="停頓超過此時間即插入逗號（數值越小＝逗號越多）",
+                    visible=False,
                 )
 
                 multi_gpu_checkbox = gr.Checkbox(
@@ -792,21 +766,20 @@ def create_interface() -> gr.Blocks:
                 multi_gpu_checkbox,
                 translate_hakka_checkbox,
                 add_punctuation_checkbox,
+                gap_threshold_slider,
             ],
             outputs=[status_text, srt_output, srt_file],
         )
 
-        # Handle model selection change - apply language and task constraints
+        # Handle model selection change
         HAKKA_MODELS = [
             "formospeech/whisper-large-v2-taiwanese-hakka-v1",
             "formospeech/whisper-large-v3-taiwanese-hakka",
         ]
 
         def on_model_change(model_name):
-            """Handle model selection change."""
             is_hakka = any(m in model_name for m in HAKKA_MODELS)
 
-            # Language constraints
             if is_hakka:
                 language_update = gr.update(
                     value="zh",
@@ -816,7 +789,6 @@ def create_interface() -> gr.Blocks:
             else:
                 language_update = gr.update(interactive=True, info=None)
 
-            # Task constraints
             if model_name == "large-v3-turbo":
                 task_update = gr.update(
                     value="transcribe",
@@ -826,11 +798,7 @@ def create_interface() -> gr.Blocks:
             else:
                 task_update = gr.update(interactive=True, info=None)
 
-            # Show LLM translation toggle only for Hakka models
-            translate_hakka_update = gr.update(
-                visible=is_hakka,
-                value=False,
-            )
+            translate_hakka_update = gr.update(visible=is_hakka, value=False)
 
             return language_update, task_update, translate_hakka_update
 
@@ -867,6 +835,13 @@ def create_interface() -> gr.Blocks:
             outputs=[min_silence_slider],
         )
 
+        # Toggle gap_threshold visibility based on add_punctuation checkbox
+        add_punctuation_checkbox.change(
+            fn=lambda x: gr.update(visible=x),
+            inputs=[add_punctuation_checkbox],
+            outputs=[gap_threshold_slider],
+        )
+
         # Copy to clipboard functionality
         copy_btn.click(
             fn=None,
@@ -897,10 +872,8 @@ def main():
     print("🚀 Starting Whisper ASR Service (Improved Version)")
     print("=" * 60 + "\n")
 
-    # Clean up all temporary files on startup (fresh start)
     print("🧹 Cleaning up temporary files...")
 
-    # Completely clean /tmp/whisper-downloads
     tmp_dir = "/tmp/whisper-downloads"
     if os.path.exists(tmp_dir):
         try:
@@ -909,7 +882,6 @@ def main():
         except Exception as e:
             print(f"  ⚠️  Failed to clean {tmp_dir}: {e}")
 
-    # Completely clean /tmp/whisper-sessions
     sessions_dir = "/tmp/whisper-sessions"
     if os.path.exists(sessions_dir):
         try:
@@ -918,7 +890,6 @@ def main():
         except Exception as e:
             print(f"  ⚠️  Failed to clean {sessions_dir}: {e}")
 
-    # Clean old SRT files in /app/outputs (keep structure)
     output_dir = "/app/outputs"
     if os.path.exists(output_dir):
         try:
@@ -928,33 +899,27 @@ def main():
         except Exception as e:
             print(f"  ⚠️  Failed to clean {output_dir}: {e}")
 
-    # Pull Ollama model in background if LLM is enabled
     if LLM_ENABLED:
         print(f"🤖 LLM enabled — checking Ollama model availability...")
         pull_model_if_needed()
     else:
         print("ℹ️  LLM disabled (ENABLE_LLM=false) — skipping Ollama setup")
 
-    # Pre-load model if specified
     default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
     preload = os.environ.get("PRELOAD_MODEL", "false").lower() == "true"
 
     if preload:
         print(f"🔄 Pre-loading model: {default_model}")
-        # Pre-create one transcriber in pool
         trans, worker_id = transcriber_pool.get_single_gpu_transcriber(
             default_model, True, 0.1
         )
         transcriber_pool.release_single_gpu_transcriber(worker_id)
         print("✅ Model pre-loaded")
 
-    # Create FastAPI app
     fastapi_app = FastAPI()
 
-    # Add custom route for PDF file
     @fastapi_app.get("/terms-and-privacy")
     async def serve_pdf():
-        """Serve the Terms and Privacy PDF file."""
         pdf_path = (
             "/app/docs/Terms_and_Privacy.pdf"
             if os.path.exists("/app/docs/Terms_and_Privacy.pdf")
@@ -970,23 +935,19 @@ def main():
             )
         return {"error": "File not found"}
 
-    # Create Gradio interface
     gradio_app = create_interface()
 
-    # Enable queue for handling multiple users
     gradio_app.queue(
         max_size=10,
-        default_concurrency_limit=2,  # Allow 2 concurrent processing
+        default_concurrency_limit=2,
     )
 
-    # Mount Gradio app on FastAPI
     fastapi_app = gr.mount_gradio_app(
         fastapi_app,
         gradio_app,
         path="/",
     )
 
-    # Launch with uvicorn
     import uvicorn
 
     uvicorn.run(
