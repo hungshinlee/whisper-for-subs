@@ -100,10 +100,6 @@ class TranscriberPool:
         use_vad: bool,
         min_silence_duration_s: float,
     ) -> Tuple[WhisperTranscriber, str]:
-        """
-        Get an available single-GPU transcriber or create a new one.
-        Returns: (transcriber, worker_id)
-        """
         min_silence_duration_ms = int(min_silence_duration_s * 1000)
 
         with self.lock:
@@ -142,7 +138,6 @@ class TranscriberPool:
             return self.single_gpu_pool[worker_id], worker_id
 
     def release_single_gpu_transcriber(self, worker_id: str):
-        """Release a transcriber back to the pool."""
         with self.lock:
             if (
                 worker_id in self.single_gpu_pool
@@ -156,7 +151,6 @@ class TranscriberPool:
         model_size: str,
         min_silence_duration_s: float,
     ) -> Tuple[ParallelWhisperTranscriber, str]:
-        """Get or create multi-GPU transcriber."""
         min_silence_duration_ms = int(min_silence_duration_s * 1000)
 
         with self.lock:
@@ -184,7 +178,6 @@ class TranscriberPool:
             return trans, worker_id
 
     def release_parallel_transcriber(self, worker_id: str):
-        """Release a parallel transcriber back to the pool."""
         with self.lock:
             if (
                 worker_id in self.parallel_gpu_pool
@@ -199,7 +192,6 @@ transcriber_pool = TranscriberPool(max_workers=2)
 
 
 def cleanup_old_files(max_age_hours: int = 24):
-    """Clean up old temporary files and outputs."""
     now = datetime.now()
 
     tmp_dir = "/tmp/whisper-downloads"
@@ -238,7 +230,6 @@ def cleanup_old_files(max_age_hours: int = 24):
 
 
 def format_progress_html(percent: int, message: str) -> str:
-    """Generate HTML for progress bar."""
     return f"""
 <div class="progress-bar-container">
     <div style="margin-bottom: 5px; font-weight: 500;">{message}</div>
@@ -267,18 +258,11 @@ def process_audio(
     add_punctuation: bool = False,
     gap_threshold_s: float = 0.3,
 ) -> Generator[Tuple[str, str, Optional[str]], None, None]:
-    """
-    Process audio from file or YouTube URL.
-
-    Yields:
-        Tuple of (status message, SRT content, SRT file path)
-    """
     session_id = uuid.uuid4().hex[:12]
     session_dir = os.path.join("/tmp/whisper-sessions", session_id)
     os.makedirs(session_dir, exist_ok=True)
 
     start_time = time.time()
-
     audio_path = None
     temp_files = []
     video_title = "output"
@@ -302,17 +286,14 @@ def process_audio(
                 video_title = info.get("title", "youtube_audio")
                 yield (
                     format_progress_html(10, f"Downloading: {video_title[:40]}..."),
-                    "",
-                    None,
+                    "", None,
                 )
 
             download_dir = os.path.join(session_dir, "downloads")
             os.makedirs(download_dir, exist_ok=True)
 
             audio_path, title = download_audio_with_progress(
-                youtube_url,
-                output_dir=download_dir,
-                progress_callback=None,
+                youtube_url, output_dir=download_dir, progress_callback=None,
             )
 
             yield format_progress_html(30, "Download complete"), "", None
@@ -333,12 +314,10 @@ def process_audio(
             shutil.copy2(audio_file, upload_copy)
             audio_path = upload_copy
             temp_files.append(upload_copy)
-
             video_title = os.path.splitext(os.path.basename(audio_file))[0]
             yield (
                 format_progress_html(10, "Audio file loaded and copied to session"),
-                "",
-                None,
+                "", None,
             )
             print(f"📁 Uploaded file copied to session: {upload_copy}")
         else:
@@ -358,11 +337,7 @@ def process_audio(
 
         if use_parallel:
             is_parallel = True
-            yield (
-                format_progress_html(35, "Loading models on multiple GPUs..."),
-                "",
-                None,
-            )
+            yield (format_progress_html(35, "Loading models on multiple GPUs..."), "", None)
 
             para_trans, worker_id = transcriber_pool.get_parallel_transcriber(
                 model_size, min_silence_duration_s
@@ -370,11 +345,8 @@ def process_audio(
             num_gpus_used = para_trans.num_gpus
 
             yield (
-                format_progress_html(
-                    40, f"Starting parallel transcription on {num_gpus_used} GPUs..."
-                ),
-                "",
-                None,
+                format_progress_html(40, f"Starting parallel transcription on {num_gpus_used} GPUs..."),
+                "", None,
             )
             print(f"🚀 Using parallel transcriber: {worker_id} ({num_gpus_used} GPUs)")
 
@@ -389,30 +361,22 @@ def process_audio(
             )
         else:
             is_parallel = False
-            yield (
-                format_progress_html(35, "Loading Whisper model on GPU 0..."),
-                "",
-                None,
-            )
+            yield (format_progress_html(35, "Loading Whisper model on GPU 0..."), "", None)
 
             trans, worker_id = transcriber_pool.get_single_gpu_transcriber(
                 model_size, use_vad, min_silence_duration_s
             )
 
             yield (
-                format_progress_html(
-                    40, "Model loaded on GPU 0. Starting transcription..."
-                ),
-                "",
-                None,
+                format_progress_html(40, "Model loaded on GPU 0. Starting transcription..."),
+                "", None,
             )
             print(f"🔧 Using single-GPU transcriber: {worker_id}")
 
             last_progress = [40]
 
             def transcribe_progress(pct, msg):
-                mapped = 40 + int(pct * 0.45)
-                last_progress[0] = mapped
+                last_progress[0] = 40 + int(pct * 0.45)
 
             segments = trans.transcribe(
                 audio_path,
@@ -435,15 +399,8 @@ def process_audio(
             "formospeech/whisper-large-v3-taiwanese-hakka",
         ])
         if translate_hakka and is_hakka_model and LLM_ENABLED:
-            yield (
-                format_progress_html(86, "Translating Hakka → Mandarin via LLM..."),
-                "",
-                None,
-            )
-            segments = translate_segments(
-                segments,
-                system_prompt=llm_system_prompt,
-            )
+            yield (format_progress_html(86, "Translating Hakka → Mandarin via LLM..."), "", None)
+            segments = translate_segments(segments, system_prompt=llm_system_prompt)
             print("✅ Hakka translation complete")
         elif translate_hakka and not LLM_ENABLED:
             print("⚠️  LLM translation requested but ENABLE_LLM=false — skipping")
@@ -452,11 +409,7 @@ def process_audio(
         if language == "zh" and convert_to_traditional:
             converter = get_converter()
             if converter.is_available():
-                yield (
-                    format_progress_html(87, "Converting to Traditional Chinese..."),
-                    "",
-                    None,
-                )
+                yield (format_progress_html(87, "Converting to Traditional Chinese..."), "", None)
                 segments = convert_segments_to_traditional(segments)
                 print("✅ Converted to Traditional Chinese")
             else:
@@ -466,13 +419,9 @@ def process_audio(
         if add_punctuation:
             yield (
                 format_progress_html(88, f"Adding punctuation (gap ≥ {gap_threshold_s:.2f}s)..."),
-                "",
-                None,
+                "", None,
             )
-            segments = add_punctuation_to_segments(
-                segments,
-                gap_threshold_s=gap_threshold_s,
-            )
+            segments = add_punctuation_to_segments(segments, gap_threshold_s=gap_threshold_s)
             print(f"✅ Punctuation added (gap_threshold={gap_threshold_s:.2f}s)")
 
         # Merge segments if requested
@@ -505,34 +454,27 @@ def process_audio(
         print(f"💾 SRT saved: {srt_path}")
 
         processing_time = time.time() - start_time
-
         gpu_info = f"{num_gpus_used} GPUs" if use_parallel else "GPU 0 (single)"
-        status_parts = [
-            f"✅ Transcription complete! {len(segments)} subtitle segments generated.\n"
-        ]
+        status_parts = [f"✅ Transcription complete! {len(segments)} subtitle segments generated.\n"]
         status_parts.append(f"Session: {session_id}")
         status_parts.append(f"Mode: {gpu_info}")
         if audio_duration > 0:
             status_parts.append(f"Audio duration: {audio_duration:.1f}s")
         status_parts.append(f"Processing time: {processing_time:.1f}s")
         if audio_duration > 0 and processing_time > 0:
-            speed_ratio = audio_duration / processing_time
-            status_parts.append(f"Speed: {speed_ratio:.2f}x realtime")
-
-        status = " | ".join(status_parts)
+            status_parts.append(f"Speed: {audio_duration / processing_time:.2f}x realtime")
 
         print(f"\n{'=' * 60}")
         print(f"✅ Session completed: {session_id}")
         print(f"⏱️  Total time: {processing_time:.1f}s")
         print(f"{'=' * 60}\n")
 
-        yield status, srt_content, srt_path
+        yield " | ".join(status_parts), srt_content, srt_path
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"\n❌ Session failed: {session_id}")
-        print(f"Error: {str(e)}\n")
+        print(f"\n❌ Session failed: {session_id}\nError: {str(e)}\n")
         yield f"❌ Error in session {session_id}: {str(e)}", "", None
 
     finally:
@@ -546,21 +488,18 @@ def process_audio(
             if f and os.path.exists(f):
                 try:
                     os.unlink(f)
-                    print(f"🧹 Cleaned temp file: {f}")
-                except Exception as e:
-                    print(f"⚠️  Failed to clean {f}: {e}")
+                except Exception:
+                    pass
 
         if os.path.exists(session_dir):
             try:
                 shutil.rmtree(session_dir)
-                print(f"🧹 Cleaned session directory: {session_dir}")
-            except Exception as e:
-                print(f"⚠️  Failed to clean session dir: {e}")
+            except Exception:
+                pass
 
 
 # Build Gradio interface
 def create_interface() -> gr.Blocks:
-    """Create and return Gradio interface."""
 
     with gr.Blocks(
         title="FormoSST: Speech-to-Text System for Taiwanese Languages",
@@ -577,7 +516,7 @@ def create_interface() -> gr.Blocks:
             - **[陳力瑋 Li-Wei Chen](mailto:wayne900619@gmail.com)**（國立清華大學資訊工程研究所）
             ### Contributors
             - **[王新民 Hsin-Min Wang](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html)**（中央研究院資訊科學研究所）
-            - **[廖沛俊 Pei-Jun Liao](mailto:newsboy3423@gmail.com)**（中央研究院資訊科學研究所）                      
+            - **[廖沛俊 Pei-Jun Liao](mailto:newsboy3423@gmail.com)**（中央研究院資訊科學研究所）
             """
         )
 
@@ -593,7 +532,7 @@ def create_interface() -> gr.Blocks:
             )
 
         with gr.Row():
-            # Left column: Input
+            # ── Left column: Input & Settings ──────────────────────────────
             with gr.Column(scale=1):
                 gr.Markdown("### 📥 Input")
 
@@ -638,9 +577,7 @@ def create_interface() -> gr.Blocks:
 
                 with gr.Row():
                     language_radio = gr.Radio(
-                        choices=[
-                            (name, code) for code, name in SUPPORTED_LANGUAGES.items()
-                        ],
+                        choices=[(name, code) for code, name in SUPPORTED_LANGUAGES.items()],
                         value=language_value,
                         label="Language",
                         interactive=language_interactive,
@@ -659,62 +596,46 @@ def create_interface() -> gr.Blocks:
                         label="Task",
                         interactive=task_interactive,
                         info="Note: large-v3-turbo only supports Transcribe"
-                        if not task_interactive
-                        else None,
+                        if not task_interactive else None,
                     )
 
                 with gr.Row():
-                    use_vad_checkbox = gr.Checkbox(
-                        value=True,
-                        label="Enable VAD",
-                    )
-                    merge_checkbox = gr.Checkbox(
-                        value=True,
-                        label="Merge Short Subtitles",
-                    )
-                    zh_conv_checkbox = gr.Checkbox(
-                        value=False,
-                        label="Convert to zh-TW",
-                    )
+                    use_vad_checkbox = gr.Checkbox(value=True, label="Enable VAD")
+                    merge_checkbox = gr.Checkbox(value=True, label="Merge Short Subtitles")
+                    zh_conv_checkbox = gr.Checkbox(value=False, label="Convert to zh-TW")
                     add_punctuation_checkbox = gr.Checkbox(
                         value=False,
                         label="Add Punctuation (，。)",
                         info="在每個字幕結尾加上句號，並在停頓處插入逗號",
                     )
 
-                # LLM translation toggle — only shown for Hakka models + LLM enabled
-                translate_hakka_checkbox = gr.Checkbox(
-                    value=False,
-                    label="🤖 Translate Hakka → Mandarin (via Ollama LLM)",
-                    visible=False,
-                    interactive=LLM_ENABLED,
-                    info=None if LLM_ENABLED else "LLM not deployed (ENABLE_LLM=false)",
-                )
-
-                # LLM system prompt — only shown when translate_hakka is checked
-                llm_prompt_textbox = gr.Textbox(
-                    value=DEFAULT_SYSTEM_PROMPT,
-                    label="🤖 LLM System Prompt",
-                    info="可自訂翻譯指令，留空則使用預設 Prompt",
-                    lines=6,
-                    visible=False,
-                )
+                # ── LLM controls — wrapped in a Column so visibility is
+                #    controlled at the container level.  This avoids Gradio's
+                #    unreliable event handling on hidden Checkbox components.
+                with gr.Column(visible=False) as llm_col:
+                    translate_hakka_checkbox = gr.Checkbox(
+                        value=False,
+                        label="🤖 Translate Hakka → Mandarin (via Ollama LLM)",
+                        interactive=LLM_ENABLED,
+                        info=None if LLM_ENABLED else "LLM not deployed (ENABLE_LLM=false)",
+                    )
+                    # Prompt box — visible only when translate checkbox is checked
+                    llm_prompt_textbox = gr.Textbox(
+                        value=DEFAULT_SYSTEM_PROMPT,
+                        label="🤖 LLM System Prompt",
+                        info="可自訂翻譯指令，留空則使用預設 Prompt",
+                        lines=6,
+                        visible=False,
+                    )
 
                 min_silence_slider = gr.Slider(
-                    minimum=0.01,
-                    maximum=2.0,
-                    value=0.1,
-                    step=0.01,
+                    minimum=0.01, maximum=2.0, value=0.1, step=0.01,
                     label="VAD: Minimum Silence Duration (seconds)",
                     visible=True,
                 )
 
-                # Punctuation gap threshold — only shown when Add Punctuation is checked
                 gap_threshold_slider = gr.Slider(
-                    minimum=0.1,
-                    maximum=1.0,
-                    value=0.3,
-                    step=0.05,
+                    minimum=0.1, maximum=1.0, value=0.3, step=0.05,
                     label="Punctuation: Comma Gap Threshold (seconds)",
                     info="停頓超過此時間即插入逗號（數值越小＝逗號越多）",
                     visible=False,
@@ -726,21 +647,14 @@ def create_interface() -> gr.Blocks:
                 )
 
                 max_chars_slider = gr.Slider(
-                    minimum=40,
-                    maximum=120,
-                    value=80,
-                    step=10,
+                    minimum=40, maximum=120, value=80, step=10,
                     label="Max Characters Per Line",
                     visible=True,
                 )
 
-                process_btn = gr.Button(
-                    "🚀 Start",
-                    variant="primary",
-                    size="lg",
-                )
+                process_btn = gr.Button("🚀 Start", variant="primary", size="lg")
 
-            # Right column: Output
+            # ── Right column: Output ────────────────────────────────────────
             with gr.Column(scale=1):
                 gr.Markdown("### 📤 Output")
 
@@ -753,17 +667,13 @@ def create_interface() -> gr.Blocks:
                 )
 
                 with gr.Row():
-                    copy_btn = gr.Button(
-                        "Copy to Clipboard",
-                        elem_classes="copy-button",
-                    )
+                    copy_btn = gr.Button("Copy to Clipboard", elem_classes="copy-button")
                     copy_status = gr.HTML("", elem_classes="copy-success")
 
-                srt_file = gr.File(
-                    label="Download SRT File",
-                )
+                srt_file = gr.File(label="Download SRT File")
 
-        # Event handlers
+        # ── Event handlers ──────────────────────────────────────────────────
+
         process_btn.click(
             fn=process_audio,
             inputs=[
@@ -786,7 +696,6 @@ def create_interface() -> gr.Blocks:
             outputs=[status_text, srt_output, srt_file],
         )
 
-        # Handle model selection change
         HAKKA_MODELS = [
             "formospeech/whisper-large-v2-taiwanese-hakka-v1",
             "formospeech/whisper-large-v3-taiwanese-hakka",
@@ -795,38 +704,32 @@ def create_interface() -> gr.Blocks:
         def on_model_change(model_name):
             is_hakka = any(m in model_name for m in HAKKA_MODELS)
 
-            if is_hakka:
-                language_update = gr.update(
-                    value="zh",
-                    interactive=False,
-                    info="Note: This model only supports Mandarin",
-                )
-            else:
-                language_update = gr.update(interactive=True, info=None)
+            language_update = gr.update(
+                value="zh", interactive=False,
+                info="Note: This model only supports Mandarin",
+            ) if is_hakka else gr.update(interactive=True, info=None)
 
-            if model_name == "large-v3-turbo":
-                task_update = gr.update(
-                    value="transcribe",
-                    interactive=False,
-                    info="Note: large-v3-turbo only supports Transcribe",
-                )
-            else:
-                task_update = gr.update(interactive=True, info=None)
+            task_update = gr.update(
+                value="transcribe", interactive=False,
+                info="Note: large-v3-turbo only supports Transcribe",
+            ) if model_name == "large-v3-turbo" else gr.update(interactive=True, info=None)
 
-            # Show LLM controls only for Hakka models
-            translate_hakka_update = gr.update(visible=is_hakka, value=False)
-            # Hide prompt box when switching away from Hakka model
-            llm_prompt_update = gr.update(visible=False)
+            # Show/hide the whole LLM column; reset checkbox & prompt on every model switch
+            llm_col_update       = gr.update(visible=is_hakka)
+            checkbox_reset       = gr.update(value=False)
+            prompt_hide          = gr.update(visible=False)
 
-            return language_update, task_update, translate_hakka_update, llm_prompt_update
+            return language_update, task_update, llm_col_update, checkbox_reset, prompt_hide
 
         model_dropdown.change(
             fn=on_model_change,
             inputs=[model_dropdown],
-            outputs=[language_radio, task_radio, translate_hakka_checkbox, llm_prompt_textbox],
+            outputs=[language_radio, task_radio, llm_col, translate_hakka_checkbox, llm_prompt_textbox],
         )
 
-        # Show/hide LLM prompt textbox together with translate checkbox
+        # Show/hide LLM prompt when translate checkbox is toggled.
+        # Because translate_hakka_checkbox is always visible inside llm_col,
+        # this .change event fires reliably.
         translate_hakka_checkbox.change(
             fn=lambda checked: gr.update(visible=checked),
             inputs=[translate_hakka_checkbox],
@@ -839,50 +742,38 @@ def create_interface() -> gr.Blocks:
             inputs=[audio_input],
             outputs=[youtube_input],
         )
-
         youtube_input.change(
             fn=lambda x: None if x else gr.update(),
             inputs=[youtube_input],
             outputs=[audio_input],
         )
 
-        # Toggle max_chars visibility based on merge checkbox
+        # Toggle dependent sliders
         merge_checkbox.change(
             fn=lambda x: gr.update(visible=x),
             inputs=[merge_checkbox],
             outputs=[max_chars_slider],
         )
-
-        # Toggle min_silence visibility based on VAD checkbox
         use_vad_checkbox.change(
             fn=lambda x: gr.update(visible=x),
             inputs=[use_vad_checkbox],
             outputs=[min_silence_slider],
         )
-
-        # Toggle gap_threshold visibility based on add_punctuation checkbox
         add_punctuation_checkbox.change(
             fn=lambda x: gr.update(visible=x),
             inputs=[add_punctuation_checkbox],
             outputs=[gap_threshold_slider],
         )
 
-        # Copy to clipboard functionality
         copy_btn.click(
             fn=None,
             inputs=[srt_output],
             outputs=[copy_status],
             js="""(srt_content) => {
-                if (!srt_content) {
-                    return "⚠️ No content to copy";
-                }
+                if (!srt_content) return "⚠️ No content to copy";
                 navigator.clipboard.writeText(srt_content).then(
-                    () => {
-                        return "✅ Copied to clipboard!";
-                    },
-                    (err) => {
-                        return "❌ Failed to copy: " + err;
-                    }
+                    () => "✅ Copied to clipboard!",
+                    (err) => "❌ Failed to copy: " + err
                 );
                 return "✅ Copied to clipboard!";
             }""",
@@ -892,28 +783,19 @@ def create_interface() -> gr.Blocks:
 
 
 def main():
-    """Main entry point."""
     print("\n" + "=" * 60)
     print("🚀 Starting Whisper ASR Service (Improved Version)")
     print("=" * 60 + "\n")
 
     print("🧹 Cleaning up temporary files...")
 
-    tmp_dir = "/tmp/whisper-downloads"
-    if os.path.exists(tmp_dir):
-        try:
-            shutil.rmtree(tmp_dir)
-            print(f"  ✓ Cleaned {tmp_dir}")
-        except Exception as e:
-            print(f"  ⚠️  Failed to clean {tmp_dir}: {e}")
-
-    sessions_dir = "/tmp/whisper-sessions"
-    if os.path.exists(sessions_dir):
-        try:
-            shutil.rmtree(sessions_dir)
-            print(f"  ✓ Cleaned {sessions_dir}")
-        except Exception as e:
-            print(f"  ⚠️  Failed to clean {sessions_dir}: {e}")
+    for path in ["/tmp/whisper-downloads", "/tmp/whisper-sessions"]:
+        if os.path.exists(path):
+            try:
+                shutil.rmtree(path)
+                print(f"  ✓ Cleaned {path}")
+            except Exception as e:
+                print(f"  ⚠️  Failed to clean {path}: {e}")
 
     output_dir = "/app/outputs"
     if os.path.exists(output_dir):
@@ -925,19 +807,15 @@ def main():
             print(f"  ⚠️  Failed to clean {output_dir}: {e}")
 
     if LLM_ENABLED:
-        print(f"🤖 LLM enabled — checking Ollama model availability...")
+        print("🤖 LLM enabled — checking Ollama model availability...")
         pull_model_if_needed()
     else:
         print("ℹ️  LLM disabled (ENABLE_LLM=false) — skipping Ollama setup")
 
     default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
-    preload = os.environ.get("PRELOAD_MODEL", "false").lower() == "true"
-
-    if preload:
+    if os.environ.get("PRELOAD_MODEL", "false").lower() == "true":
         print(f"🔄 Pre-loading model: {default_model}")
-        trans, worker_id = transcriber_pool.get_single_gpu_transcriber(
-            default_model, True, 0.1
-        )
+        trans, worker_id = transcriber_pool.get_single_gpu_transcriber(default_model, True, 0.1)
         transcriber_pool.release_single_gpu_transcriber(worker_id)
         print("✅ Model pre-loaded")
 
@@ -954,27 +832,15 @@ def main():
             return FileResponse(
                 pdf_path,
                 media_type="application/pdf",
-                headers={
-                    "Content-Disposition": "inline; filename=Terms_and_Privacy.pdf"
-                },
+                headers={"Content-Disposition": "inline; filename=Terms_and_Privacy.pdf"},
             )
         return {"error": "File not found"}
 
     gradio_app = create_interface()
-
-    gradio_app.queue(
-        max_size=10,
-        default_concurrency_limit=2,
-    )
-
-    fastapi_app = gr.mount_gradio_app(
-        fastapi_app,
-        gradio_app,
-        path="/",
-    )
+    gradio_app.queue(max_size=10, default_concurrency_limit=2)
+    fastapi_app = gr.mount_gradio_app(fastapi_app, gradio_app, path="/")
 
     import uvicorn
-
     uvicorn.run(
         fastapi_app,
         host=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
