@@ -20,6 +20,7 @@ scipy>=1.10.0  # For audio resampling
 
 # Utilities
 ffmpeg-python>=0.2.0
+requests>=2.31.0
 
 # Chinese Conversion (Simplified to Traditional)
 opencc-python-reimplemented>=0.1.7
