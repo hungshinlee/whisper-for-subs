@@ -167,70 +167,65 @@ class WhisperTranscriber:
         )
         print("✅ Model loaded successfully")
 
-        # Defensive n_mels check:
-        # Whisper v3 models require 128 mel bins; v1/v2 models use 80.
-        # Older faster-whisper (< 1.1.0) initialises FeatureExtractor with 80 bins
-        # even for v3 models, because it doesn't read n_mels from model config.
-        # NOTE: patching .n_mels alone is NOT enough — the mel filterbank matrix
-        # is pre-computed at __init__ time and must be recomputed from scratch.
-        # This block is a safety net; the real fix is faster-whisper==1.1.1 in
-        # requirements.txt so the model config is read correctly at load time.
+        # ---------------------------------------------------------------
+        # Fix n_mels mismatch for Whisper v3 models.
+        #
+        # Root cause: faster-whisper's WhisperFeatureExtractor uses the
+        # attribute name `feature_size` (NOT `n_mels`) to store mel bin
+        # count. Older versions default to feature_size=80 regardless of
+        # the model, causing shape (1,80,3000) when v3 needs (1,128,3000).
+        #
+        # We read `feature_size` (with `mel_filters.shape[0]` as fallback)
+        # and replace the FeatureExtractor instance when wrong.
+        # ---------------------------------------------------------------
         is_v3_model = "v3" in model_size.lower()
         expected_n_mels = 128 if is_v3_model else 80
         fe = getattr(self.model, "feature_extractor", None)
-        actual_n_mels = getattr(fe, "n_mels", None)
+
+        # Determine actual mel bins — try every known attribute name
+        actual_n_mels = None
+        if fe is not None:
+            if hasattr(fe, "mel_filters") and fe.mel_filters is not None:
+                actual_n_mels = fe.mel_filters.shape[0]  # most reliable
+            elif hasattr(fe, "feature_size"):
+                actual_n_mels = fe.feature_size
+            elif hasattr(fe, "n_mels"):
+                actual_n_mels = fe.n_mels
+
+        print(f"🔍 feature_extractor n_mels check: actual={actual_n_mels}, expected={expected_n_mels}")
 
         if actual_n_mels is not None and actual_n_mels != expected_n_mels:
             print(
-                f"⚠️  n_mels mismatch: FeatureExtractor has {actual_n_mels} bins, "
-                f"expected {expected_n_mels} for '{model_size}'. "
-                f"Reinitialising FeatureExtractor..."
+                f"⚠️  n_mels mismatch ({actual_n_mels} → {expected_n_mels}). "
+                f"Replacing FeatureExtractor..."
             )
-            fixed = False
-
-            # Strategy 1: replace the whole FeatureExtractor instance
             try:
                 from faster_whisper.feature_extractor import FeatureExtractor
                 self.model.feature_extractor = FeatureExtractor(
-                    feature_size=expected_n_mels,
-                    sampling_rate=fe.sampling_rate if hasattr(fe, "sampling_rate") else 16000,
-                    hop_length=fe.hop_length if hasattr(fe, "hop_length") else 160,
-                    chunk_length=fe.chunk_length if hasattr(fe, "chunk_length") else 30,
-                    n_fft=fe.n_fft if hasattr(fe, "n_fft") else 400,
+                    feature_size=expected_n_mels
                 )
-                actual_after = self.model.feature_extractor.n_mels
-                if actual_after == expected_n_mels:
-                    print(f"✅ FeatureExtractor replaced: {actual_n_mels} → {expected_n_mels} bins")
-                    fixed = True
-            except Exception as e1:
-                print(f"   Strategy 1 failed: {e1}")
-
-            # Strategy 2: patch mel_filters matrix directly via numpy
-            if not fixed:
-                try:
-                    import numpy as np
-                    fe = self.model.feature_extractor  # re-fetch in case strategy 1 partially ran
-                    # Recompute mel filterbank: shape should be (n_mels, 1 + n_fft // 2)
-                    n_fft = getattr(fe, "n_fft", 400)
-                    from faster_whisper.feature_extractor import get_mel_filters
-                    fe.mel_filters = get_mel_filters(
-                        sr=16000, n_fft=n_fft, n_mels=expected_n_mels
-                    ).astype(np.float32)
-                    fe.n_mels = expected_n_mels
-                    print(f"✅ mel_filters recomputed: {actual_n_mels} → {expected_n_mels} bins")
-                    fixed = True
-                except Exception as e2:
-                    print(f"   Strategy 2 failed: {e2}")
-
-            if not fixed:
+                # Verify fix via mel_filters shape
+                new_fe = self.model.feature_extractor
+                verified = None
+                if hasattr(new_fe, "mel_filters") and new_fe.mel_filters is not None:
+                    verified = new_fe.mel_filters.shape[0]
+                elif hasattr(new_fe, "feature_size"):
+                    verified = new_fe.feature_size
+                if verified == expected_n_mels:
+                    print(f"✅ FeatureExtractor replaced successfully: {expected_n_mels} bins")
+                else:
+                    raise RuntimeError(
+                        f"FeatureExtractor replacement failed: got {verified} bins after fix"
+                    )
+            except Exception as fix_err:
                 raise RuntimeError(
-                    f"Cannot fix n_mels mismatch for model '{model_size}' "
-                    f"(expected {expected_n_mels}, got {actual_n_mels}). "
-                    f"Please rebuild the Docker image: "
-                    f"docker compose build --no-cache && docker compose up -d"
-                )
-        elif actual_n_mels is not None:
+                    f"Cannot fix n_mels mismatch for '{model_size}': {fix_err}\n"
+                    f"Rebuild with: docker compose build --no-cache && docker compose up -d"
+                ) from fix_err
+        elif actual_n_mels == expected_n_mels:
             print(f"✅ n_mels OK: {actual_n_mels} bins")
+        else:
+            print(f"⚠️  Could not determine n_mels from feature_extractor — proceeding anyway")
 
         # Load VAD if enabled
         self.vad = None
