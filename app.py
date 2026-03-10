@@ -32,6 +32,14 @@ from youtube_downloader import (
 )
 from srt_utils import segments_to_srt, merge_segments
 from chinese_converter import convert_segments_to_traditional, get_converter
+from hakka_translator import (
+    translate_segments,
+    is_llm_enabled,
+    pull_model_if_needed,
+)
+
+# Whether LLM translation is available in this deployment
+LLM_ENABLED = is_llm_enabled()
 
 
 # Custom CSS with Roboto font
@@ -262,6 +270,7 @@ def process_audio(
     convert_to_traditional: bool,
     max_chars: int,
     use_multi_gpu: bool,
+    translate_hakka: bool = False,
 ) -> Generator[Tuple[str, str, Optional[str]], None, None]:
     """
     Process audio from file or YouTube URL.
@@ -438,6 +447,22 @@ def process_audio(
             return
 
         print(f"📝 Generated {len(segments)} segments")
+
+        # Translate Hakka to Mandarin via LLM (formospeech models only)
+        is_hakka_model = any(m in model_size for m in [
+            "formospeech/whisper-large-v2-taiwanese-hakka-v1",
+            "formospeech/whisper-large-v3-taiwanese-hakka",
+        ])
+        if translate_hakka and is_hakka_model and LLM_ENABLED:
+            yield (
+                format_progress_html(86, "Translating Hakka → Mandarin via LLM..."),
+                "",
+                None,
+            )
+            segments = translate_segments(segments)
+            print("✅ Hakka translation complete")
+        elif translate_hakka and not LLM_ENABLED:
+            print("⚠️  LLM translation requested but ENABLE_LLM=false — skipping")
 
         # Convert to Traditional Chinese if requested
         if language == "zh" and convert_to_traditional:
@@ -669,9 +694,18 @@ def create_interface() -> gr.Blocks:
                     )
 
                     zh_conv_checkbox = gr.Checkbox(
-                        value=True,
+                        value=False,
                         label="Convert to zh-TW",
                     )
+
+                # LLM translation toggle — only shown for Hakka models + LLM enabled
+                translate_hakka_checkbox = gr.Checkbox(
+                    value=False,
+                    label="🤖 Translate Hakka → Mandarin (via Ollama LLM)",
+                    visible=False,  # shown dynamically when a Hakka model is selected
+                    interactive=LLM_ENABLED,
+                    info=None if LLM_ENABLED else "LLM not deployed (ENABLE_LLM=false)",
+                )
 
                 min_silence_slider = gr.Slider(
                     minimum=0.01,
@@ -742,46 +776,53 @@ def create_interface() -> gr.Blocks:
                 zh_conv_checkbox,
                 max_chars_slider,
                 multi_gpu_checkbox,
+                translate_hakka_checkbox,
             ],
             outputs=[status_text, srt_output, srt_file],
         )
 
         # Handle model selection change - apply language and task constraints
+        HAKKA_MODELS = [
+            "formospeech/whisper-large-v2-taiwanese-hakka-v1",
+            "formospeech/whisper-large-v3-taiwanese-hakka",
+        ]
+
         def on_model_change(model_name):
             """Handle model selection change."""
+            is_hakka = any(m in model_name for m in HAKKA_MODELS)
+
             # Language constraints
-            if any(m in model_name for m in [
-                "formospeech/whisper-large-v2-taiwanese-hakka-v1",
-                "formospeech/whisper-large-v3-taiwanese-hakka",
-            ]):
-                # Formospeech models only support Mandarin
+            if is_hakka:
                 language_update = gr.update(
                     value="zh",
                     interactive=False,
                     info="Note: This model only supports Mandarin",
                 )
             else:
-                # Other models support all languages
                 language_update = gr.update(interactive=True, info=None)
 
             # Task constraints
             if model_name == "large-v3-turbo":
-                # large-v3-turbo only supports transcribe
                 task_update = gr.update(
                     value="transcribe",
                     interactive=False,
                     info="Note: large-v3-turbo only supports Transcribe",
                 )
             else:
-                # Other models support both tasks
                 task_update = gr.update(interactive=True, info=None)
 
-            return language_update, task_update
+            # Show LLM translation toggle only for Hakka models
+            translate_hakka_update = gr.update(
+                visible=is_hakka,
+                value=False,
+            )
+
+            return language_update, task_update, translate_hakka_update
 
         model_dropdown.change(
             fn=on_model_change,
             inputs=[model_dropdown],
-            outputs=[language_radio, task_radio],
+            outputs=[language_radio, task_radio, translate_hakka_checkbox],
         )
 
         # Clear YouTube when audio uploaded and vice versa
@@ -871,6 +912,13 @@ def main():
             print(f"  ✓ Cleaned old SRT files in {output_dir}")
         except Exception as e:
             print(f"  ⚠️  Failed to clean {output_dir}: {e}")
+
+    # Pull Ollama model in background if LLM is enabled
+    if LLM_ENABLED:
+        print(f"🤖 LLM enabled — checking Ollama model availability...")
+        pull_model_if_needed()
+    else:
+        print("ℹ️  LLM disabled (ENABLE_LLM=false) — skipping Ollama setup")
 
     # Pre-load model if specified
     default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
