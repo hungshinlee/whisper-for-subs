@@ -32,6 +32,7 @@ from youtube_downloader import (
 )
 from srt_utils import segments_to_srt, merge_segments
 from chinese_converter import convert_segments_to_traditional, get_converter
+from punctuation_utils import add_punctuation_to_segments
 from hakka_translator import (
     translate_segments,
     is_llm_enabled,
@@ -271,6 +272,7 @@ def process_audio(
     max_chars: int,
     use_multi_gpu: bool,
     translate_hakka: bool = False,
+    add_punctuation: bool = False,
 ) -> Generator[Tuple[str, str, Optional[str]], None, None]:
     """
     Process audio from file or YouTube URL.
@@ -477,6 +479,16 @@ def process_audio(
                 print("✅ Converted to Traditional Chinese")
             else:
                 print("⚠️  Chinese converter not available, skipping conversion")
+
+        # Add punctuation (，and 。) if requested
+        if add_punctuation:
+            yield (
+                format_progress_html(88, "Adding punctuation marks..."),
+                "",
+                None,
+            )
+            segments = add_punctuation_to_segments(segments)
+            print("✅ Punctuation added")
 
         # Merge segments if requested
         if merge_subtitles:
@@ -692,10 +704,14 @@ def create_interface() -> gr.Blocks:
                         value=True,
                         label="Merge Short Subtitles",
                     )
-
                     zh_conv_checkbox = gr.Checkbox(
                         value=False,
                         label="Convert to zh-TW",
+                    )
+                    add_punctuation_checkbox = gr.Checkbox(
+                        value=False,
+                        label="Add Punctuation (，。)",
+                        info="在每個字幕結尾加上句號，長句內自動插入逗號",
                     )
 
                 # LLM translation toggle — only shown for Hakka models + LLM enabled
@@ -713,14 +729,12 @@ def create_interface() -> gr.Blocks:
                     value=0.1,
                     step=0.01,
                     label="VAD: Minimum Silence Duration (seconds)",
-                    # info="Minimum silence duration to split segments (default: 0.1s)",
                     visible=True,
                 )
 
                 multi_gpu_checkbox = gr.Checkbox(
                     value=True,
                     label="Use Multi-GPU Parallel Processing (for audio > 5 min)",
-                    # info="Automatically enables for long audio files",
                 )
 
                 max_chars_slider = gr.Slider(
@@ -777,6 +791,7 @@ def create_interface() -> gr.Blocks:
                 max_chars_slider,
                 multi_gpu_checkbox,
                 translate_hakka_checkbox,
+                add_punctuation_checkbox,
             ],
             outputs=[status_text, srt_output, srt_file],
         )
