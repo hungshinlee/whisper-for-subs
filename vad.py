@@ -7,6 +7,7 @@ import numpy as np
 from typing import List, Tuple, Optional
 import warnings
 
+warnings.filterwarnings("ignore", message="torch_dtype is deprecated")
 warnings.filterwarnings("ignore")
 
 

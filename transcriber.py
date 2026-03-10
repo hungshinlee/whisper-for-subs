@@ -2,6 +2,9 @@
 Whisper transcription module using faster-whisper for efficient inference.
 """
 
+import warnings
+warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*", category=UserWarning)
+
 import os
 import tempfile
 import subprocess
@@ -163,6 +166,26 @@ class WhisperTranscriber:
             compute_type=self.compute_type,
         )
         print("✅ Model loaded successfully")
+
+        # Defensive n_mels check:
+        # Whisper v3 models require 128 mel bins; v1/v2 models use 80.
+        # Some faster-whisper versions fail to detect this from model config
+        # (especially for 'large-v3-turbo' which was added after 1.0.0).
+        # We correct it explicitly to prevent shape mismatch errors.
+        is_v3_model = "v3" in model_size.lower()
+        expected_n_mels = 128 if is_v3_model else 80
+        actual_n_mels = getattr(
+            getattr(self.model, "feature_extractor", None), "n_mels", None
+        )
+        if actual_n_mels is not None and actual_n_mels != expected_n_mels:
+            print(
+                f"⚠️  n_mels mismatch detected: feature extractor has {actual_n_mels}, "
+                f"expected {expected_n_mels} for '{model_size}'. Correcting..."
+            )
+            self.model.feature_extractor.n_mels = expected_n_mels
+            print(f"✅ n_mels corrected to {expected_n_mels}")
+        elif actual_n_mels is not None:
+            print(f"✅ n_mels OK: {actual_n_mels} bins")
 
         # Load VAD if enabled
         self.vad = None

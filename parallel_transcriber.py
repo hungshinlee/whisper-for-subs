@@ -3,6 +3,9 @@ Multi-GPU parallel transcription for efficient processing of long audio files.
 OPTIMIZED VERSION with persistent worker processes and model caching.
 """
 
+import warnings
+warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*", category=UserWarning)
+
 import os
 import time
 import tempfile
