@@ -33,56 +33,78 @@ LEXICON_PATH = os.environ.get(
 )
 
 # Maximum number of matched lexicon entries to inject per batch
-LEXICON_MAX_HINTS = int(os.environ.get("LEXICON_MAX_HINTS", "40"))
+LEXICON_MAX_HINTS = int(os.environ.get("LEXICON_MAX_HINTS", "20"))
+
+# Minimum Hakka term length — single chars are too ambiguous to be useful hints
+LEXICON_MIN_TERM_LEN = int(os.environ.get("LEXICON_MIN_TERM_LEN", "2"))
 
 
-def load_lexicon(path: str = LEXICON_PATH) -> Dict[str, List[str]]:
+# Internal type: terms grouped by length for O(1) bucket lookup
+# { char_length: { hakka_term: [mandarin, ...] } }
+_LexiconIndex = Dict[int, Dict[str, List[str]]]
+
+
+def load_lexicon(path: str = LEXICON_PATH) -> "_LexiconIndex":
     """
-    Load the Hakka→Mandarin CSV into a dict mapping each Hakka term to a
-    deduplicated list of Mandarin equivalents.
+    Load the Hakka→Mandarin CSV and return a length-indexed structure.
 
     CSV format (no header): 客語漢字,華語漢字
-    Duplicate Mandarin entries for the same Hakka term are silently dropped.
-    Returns an empty dict if the file is missing or unreadable.
+    - Terms shorter than LEXICON_MIN_TERM_LEN chars are skipped (too noisy).
+    - Duplicate Mandarin entries for the same Hakka term are silently dropped.
+    - Returns an empty dict if the file is missing or unreadable.
+
+    Index structure: { term_length: { hakka_term: [mandarin, ...] } }
+    Pre-grouping by length lets build_lexicon_hint() do longest-match-first
+    without re-sorting on every call.
     """
-    lexicon: Dict[str, List[str]] = defaultdict(list)
+    flat: Dict[str, List[str]] = defaultdict(list)
     if not os.path.exists(path):
         print(f"⚠️  Lexicon file not found: {path}")
-        return lexicon
+        return {}
     try:
         with open(path, encoding="utf-8") as f:
             for row in csv.reader(f):
                 if len(row) < 2:
                     continue
                 hakka, mandarin = row[0].strip(), row[1].strip()
-                if hakka and mandarin and mandarin not in lexicon[hakka]:
-                    lexicon[hakka].append(mandarin)
-        print(f"✅ Lexicon loaded: {len(lexicon)} entries from {path}")
+                if len(hakka) < LEXICON_MIN_TERM_LEN:
+                    continue
+                if hakka and mandarin and mandarin not in flat[hakka]:
+                    flat[hakka].append(mandarin)
     except Exception as e:
         print(f"⚠️  Failed to load lexicon: {e}")
-    return dict(lexicon)
+        return {}
+
+    index: Dict[int, Dict[str, List[str]]] = defaultdict(dict)
+    for hakka, mandarin_list in flat.items():
+        index[len(hakka)][hakka] = mandarin_list
+
+    total = sum(len(v) for v in index.values())
+    print(f"✅ Lexicon loaded: {total} entries ({len(index)} length buckets) from {path}")
+    return dict(index)
 
 
-def build_lexicon_hint(texts: List[str], lexicon: Dict[str, List[str]]) -> str:
+def build_lexicon_hint(texts: List[str], lexicon: "_LexiconIndex") -> str:
     """
-    Scan the given texts for Hakka terms that appear in the lexicon.
-    Returns a formatted hint string to be appended to the system prompt,
-    or an empty string if no matches are found.
+    Scan the given texts for Hakka terms present in the length-indexed lexicon.
+    Returns a formatted hint block to append to the system prompt,
+    or an empty string when nothing matches.
 
-    Uses longest-match-first so that multi-character terms (e.g. "殺人放火")
-    take priority over their substrings (e.g. "殺人").
+    Iterates length buckets from longest to shortest (longest-match-first),
+    so multi-character terms (e.g. "殺人放火") take priority over
+    their substrings (e.g. "殺人") without an extra sort on every call.
     """
     combined = "\n".join(texts)
 
-    # Sort by length descending so longer terms match first
-    sorted_terms = sorted(lexicon.keys(), key=len, reverse=True)
-
     matched: Dict[str, List[str]] = {}
-    for term in sorted_terms:
+    for length in sorted(lexicon.keys(), reverse=True):
         if len(matched) >= LEXICON_MAX_HINTS:
             break
-        if term in combined and term not in matched:
-            matched[term] = lexicon[term]
+        for term, mandarin_list in lexicon[length].items():
+            if len(matched) >= LEXICON_MAX_HINTS:
+                break
+            if term in combined and term not in matched:
+                matched[term] = mandarin_list
 
     if not matched:
         return ""
@@ -90,7 +112,7 @@ def build_lexicon_hint(texts: List[str], lexicon: Dict[str, List[str]]) -> str:
     lines = [f"{hakka} → {'／'.join(mandarin)}" for hakka, mandarin in matched.items()]
     hint = (
         "\n【客華詞彙對照表】"
-        "下列詞彙為標準對等譯法，請優先採用，並依上下文調整、選擇為最符合華語語意習慣的方式：\n"
+        # "下列詞彙為標準對等譯法，請優先採用，並依上下文調整、選擇為最符合華語語意習慣的方式：\n"
         + "\n".join(lines)
     )
     return hint
@@ -105,7 +127,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "2. 保持與原文相近的句子長度。\n"
     "3. 若原文已是繁體中文，則原文照傳回。\n"
     "4. 一行輸入對應一行輸出，行數必須完全相同。\n"
-    # "5. 若提供了【客語詞彙對照表】，總譯時必須優先採用其中的詞彙，非必要時才可依上下文微調。"
+    "5. 若提供了【客華詞彙對照表】，總譯時必須優先採用其中的詞彙，非必要時才可依上下文微調。"
 )
 
 
