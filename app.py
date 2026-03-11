@@ -572,10 +572,10 @@ def create_interface() -> gr.Blocks:
             # FormoSST: Speech-to-Text System for Taiwanese Languages
             ## 臺灣語音辨識暨翻譯系統
 
-            ### Developers
+            ### Model Developers
             - **[李鴻欣 Hung-Shin Lee](https://www.linkedin.com/in/hungshinlee)**（聯和科創股份有限公司）
-            - **[陳力瑋 Li-Wei Chen](mailto:wayne900619@gmail.com)**（國立清華大學資訊工程研究所）
-            ### Contributors
+            - **[陳力瑋 Li-Wei Chen](mailto:wayne900619@gmail.com)**（國立清華大學資訊工程學研究所）
+            ### Machine Providers (RTX 2080 Ti * 4)
             - **[王新民 Hsin-Min Wang](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html)**（中央研究院資訊科學研究所）
             - **[廖沛俊 Pei-Jun Liao](mailto:newsboy3423@gmail.com)**（中央研究院資訊科學研究所）
             """
@@ -631,7 +631,7 @@ def create_interface() -> gr.Blocks:
                 ]):
                     language_interactive = False
                     language_value = "zh"
-                    language_info = "Note: This model only supports Mandarin"
+                    language_info = "This model supports Hakka"
                 else:
                     language_interactive = True
                     language_value = "auto"
@@ -699,7 +699,7 @@ def create_interface() -> gr.Blocks:
                     )
 
                 min_silence_slider = gr.Slider(
-                    minimum=0.01, maximum=2.0, value=0.1, step=0.01,
+                    minimum=0.01, maximum=2.0, value=0.2, step=0.01,
                     label="VAD: Minimum Silence Duration (seconds)",
                 )
 
@@ -787,7 +787,7 @@ def create_interface() -> gr.Blocks:
 
             language_update = gr.update(
                 value="zh", interactive=False,
-                info="Note: This model only supports Mandarin",
+                info="This model only supports Mandarin",
             ) if is_hakka else gr.update(interactive=True, info=None)
 
             task_update = gr.update(
