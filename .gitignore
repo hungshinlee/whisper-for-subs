@@ -23,13 +23,15 @@ Thumbs.db
 uploads/
 outputs/
 *.srt
+*.log
+logs/
+
+# Audio/video files — EXCEPT samples/ (used as demo examples in the UI)
 *.wav
 *.mp3
 *.mp4
+!samples/*.wav
+!samples/*.mp3
 
 # Docker
 .docker/
-
-# Logs
-*.log
-logs/
