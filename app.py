@@ -685,7 +685,7 @@ def create_interface() -> gr.Blocks:
                 # LLM controls — wrapped in Column to avoid Gradio hidden-element event bugs
                 with gr.Column(visible=False) as llm_col:
                     translate_hakka_checkbox = gr.Checkbox(
-                        value=False,
+                        value=True,
                         label="🤖 Translate Hakka → Mandarin (via Ollama LLM)",
                         interactive=LLM_ENABLED,
                         info=None if LLM_ENABLED else "LLM not deployed (ENABLE_LLM=false)",
