@@ -6,8 +6,11 @@ Only active when ENABLE_LLM=true is set in the environment.
 """
 
 import os
-import requests
+import csv
+import re
+from collections import defaultdict
 from typing import List, Dict, Optional
+import requests
 
 # Ollama service endpoint — resolved via Docker internal DNS when running in compose
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
@@ -22,6 +25,72 @@ OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "300"))  # seconds
 # - Small enough that Gemma 3 rarely merges lines
 # - Easy to retry individually on mismatch
 BATCH_SIZE = int(os.environ.get("OLLAMA_BATCH_SIZE", "5"))
+
+# Path to the Hakka–Mandarin lexicon CSV (relative to working dir or absolute)
+LEXICON_PATH = os.environ.get(
+    "HAKKA_LEXICON_PATH",
+    os.path.join(os.path.dirname(__file__), "lexicon", "hakka_to_mandarin.csv"),
+)
+
+# Maximum number of matched lexicon entries to inject per batch
+LEXICON_MAX_HINTS = int(os.environ.get("LEXICON_MAX_HINTS", "40"))
+
+
+def load_lexicon(path: str = LEXICON_PATH) -> Dict[str, List[str]]:
+    """
+    Load the Hakka→Mandarin CSV into a dict mapping each Hakka term to a
+    deduplicated list of Mandarin equivalents.
+
+    CSV format (no header): 客語漢字,華語漢字
+    Duplicate Mandarin entries for the same Hakka term are silently dropped.
+    Returns an empty dict if the file is missing or unreadable.
+    """
+    lexicon: Dict[str, List[str]] = defaultdict(list)
+    if not os.path.exists(path):
+        print(f"⚠️  Lexicon file not found: {path}")
+        return lexicon
+    try:
+        with open(path, encoding="utf-8") as f:
+            for row in csv.reader(f):
+                if len(row) < 2:
+                    continue
+                hakka, mandarin = row[0].strip(), row[1].strip()
+                if hakka and mandarin and mandarin not in lexicon[hakka]:
+                    lexicon[hakka].append(mandarin)
+        print(f"✅ Lexicon loaded: {len(lexicon)} entries from {path}")
+    except Exception as e:
+        print(f"⚠️  Failed to load lexicon: {e}")
+    return dict(lexicon)
+
+
+def build_lexicon_hint(texts: List[str], lexicon: Dict[str, List[str]]) -> str:
+    """
+    Scan the given texts for Hakka terms that appear in the lexicon.
+    Returns a formatted hint string to be appended to the system prompt,
+    or an empty string if no matches are found.
+
+    Uses longest-match-first so that multi-character terms (e.g. "殺人放火")
+    take priority over their substrings (e.g. "殺人").
+    """
+    combined = "\n".join(texts)
+
+    # Sort by length descending so longer terms match first
+    sorted_terms = sorted(lexicon.keys(), key=len, reverse=True)
+
+    matched: Dict[str, List[str]] = {}
+    for term in sorted_terms:
+        if len(matched) >= LEXICON_MAX_HINTS:
+            break
+        if term in combined and term not in matched:
+            matched[term] = lexicon[term]
+
+    if not matched:
+        return ""
+
+    lines = [f"{hakka} → {'／'.join(mandarin)}" for hakka, mandarin in matched.items()]
+    hint = "\n【參考詞彙】（僅供參考，請依上下文選用最自然的譯法）\n" + "\n".join(lines)
+    return hint
+
 
 # Default system prompt — also used as the UI placeholder / default value
 DEFAULT_SYSTEM_PROMPT = (
@@ -144,6 +213,8 @@ def translate_segments(
     segments: List[Dict],
     system_prompt: Optional[str] = None,
     batch_size: int = BATCH_SIZE,
+    use_lexicon: bool = False,
+    lexicon: Optional[Dict[str, List[str]]] = None,
     progress_callback=None,
 ) -> List[Dict]:
     """
@@ -158,6 +229,10 @@ def translate_segments(
                            when None or empty.
         batch_size:        Lines per LLM call (default 5; override via
                            OLLAMA_BATCH_SIZE env var).
+        use_lexicon:       If True, inject matched lexicon terms into each batch's
+                           system prompt as translation hints.
+        lexicon:           Pre-loaded lexicon dict; loaded from LEXICON_PATH if None
+                           and use_lexicon is True.
         progress_callback: Optional callback(percent, message).
 
     Returns:
@@ -178,6 +253,12 @@ def translate_segments(
     if effective_prompt != DEFAULT_SYSTEM_PROMPT:
         print("ℹ️  Using custom system prompt")
 
+    # Load lexicon once if lexicon-augmented prompting is requested
+    _lexicon: Dict[str, List[str]] = {}
+    if use_lexicon:
+        _lexicon = lexicon if lexicon is not None else load_lexicon()
+        print(f"📚 Lexicon augmentation enabled ({len(_lexicon)} entries)")
+
     total = len(segments)
     total_batches = (total + batch_size - 1) // batch_size
     print(
@@ -197,7 +278,14 @@ def translate_segments(
             pct = int((batch_idx / total_batches) * 100)
             progress_callback(pct, f"Translating batch {batch_idx + 1}/{total_batches}...")
 
-        translated = _translate_batch(batch_texts, system_prompt=effective_prompt)
+        # Build per-batch prompt: base prompt + lexicon hints for this batch
+        batch_prompt = effective_prompt
+        if use_lexicon and _lexicon:
+            hint = build_lexicon_hint(batch_texts, _lexicon)
+            if hint:
+                batch_prompt = effective_prompt + hint
+
+        translated = _translate_batch(batch_texts, system_prompt=batch_prompt)
 
         for i, text in enumerate(translated):
             translated_segments[start + i]["text"] = text

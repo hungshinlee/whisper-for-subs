@@ -36,8 +36,12 @@ from hakka_translator import (
     translate_segments,
     is_llm_enabled,
     pull_model_if_needed,
+    load_lexicon,
     DEFAULT_SYSTEM_PROMPT,
 )
+
+# Pre-load lexicon at startup (cheap, ~ms)
+_HAKKA_LEXICON = load_lexicon()
 import numpy as np
 from vad import SileroVAD
 from speech_enhancer import is_deepfilter_available, enhance_file
@@ -275,6 +279,7 @@ def process_audio(
     use_multi_gpu: bool,
     translate_hakka: bool = False,
     llm_system_prompt: str = "",
+    use_lexicon: bool = False,
     use_enhancement: bool = False,
     enhancement_mix: float = 1.0,
 ) -> Generator:
@@ -458,6 +463,8 @@ def process_audio(
             translated_segments = translate_segments(
                 [seg.copy() for seg in asr_segments],
                 system_prompt=llm_system_prompt,
+                use_lexicon=use_lexicon,
+                lexicon=_HAKKA_LEXICON,
             )
             print("✅ Hakka translation complete")
         elif translate_hakka and not LLM_ENABLED:
@@ -690,6 +697,12 @@ def create_interface() -> gr.Blocks:
                         interactive=LLM_ENABLED,
                         info=None if LLM_ENABLED else "LLM not deployed (ENABLE_LLM=false)",
                     )
+                    use_lexicon_checkbox = gr.Checkbox(
+                        value=True,
+                        label="📚 Use Lexicon Augmentation",
+                        info="將詞彙表的參考譯文注入 Prompt，幫助 LLM 正確翻譯客語詞彙",
+                        interactive=LLM_ENABLED,
+                    )
                     llm_prompt_textbox = gr.Textbox(
                         value=DEFAULT_SYSTEM_PROMPT,
                         label="🤖 LLM System Prompt",
@@ -764,6 +777,7 @@ def create_interface() -> gr.Blocks:
                 multi_gpu_checkbox,
                 translate_hakka_checkbox,
                 llm_prompt_textbox,
+                use_lexicon_checkbox,
                 use_enhancement_checkbox,
                 enhancement_mix_slider,
             ],
