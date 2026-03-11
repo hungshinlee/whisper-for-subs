@@ -56,13 +56,9 @@ def _patch_torchaudio_compat() -> None:
 
 
 def is_deepfilter_available() -> bool:
-    """Return True if deepfilternet is installed."""
-    try:
-        _patch_torchaudio_compat()
-        import df  # noqa: F401
-        return True
-    except (ImportError, Exception):
-        return False
+    """Return True if deepfilternet is installed (no-import check, instant)."""
+    import importlib.util
+    return importlib.util.find_spec("df") is not None
 
 
 def _load_model():
@@ -75,12 +71,16 @@ def _load_model():
     _patch_torchaudio_compat()
     from df import init_df
 
-    print("🔊 Loading DeepFilterNet3 model…")
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"🔊 Loading DeepFilterNet3 model on {device}…")
     _model, _df_state, _ = init_df(
         "DeepFilterNet3",
         log_level="none",
     )
-    print(f"✅ DeepFilterNet3 loaded (sample rate: {_df_state.sr()} Hz)")
+    _model = _model.to(device)
+    _model.eval()
+    print(f"✅ DeepFilterNet3 loaded on {device} (sample rate: {_df_state.sr()} Hz)")
     return _model, _df_state
 
 
