@@ -89,8 +89,8 @@ def build_lexicon_hint(texts: List[str], lexicon: Dict[str, List[str]]) -> str:
 
     lines = [f"{hakka} → {'／'.join(mandarin)}" for hakka, mandarin in matched.items()]
     hint = (
-        "\n【客語詞彙對照表】"
-        "下列詞彙為標準對等譯法，請盡量參考，並依上下文調整為最自然的總呈方式：\n"
+        "\n【客華詞彙對照表】"
+        "下列詞彙為標準對等譯法，請優先採用，並依上下文調整、選擇為最符合華語語意習慣的方式：\n"
         + "\n".join(lines)
     )
     return hint
