@@ -34,8 +34,23 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Download Silero VAD model during build
 RUN python -c "import torch; torch.hub.load('snakers4/silero-vad', 'silero_vad', force_reload=True)"
 
-# Download DeepFilterNet3 model during build
-RUN python -c "from df import init_df; init_df('DeepFilterNet3', log_level='none'); print('DeepFilterNet3 ready')"
+# Download DeepFilterNet3 model during build (with torchaudio compat shim)
+RUN python -c "
+import sys, types, torchaudio
+try:
+    from torchaudio.backend.common import AudioMetaData
+except (ImportError, ModuleNotFoundError):
+    AM = getattr(torchaudio, 'AudioMetaData', type('AudioMetaData', (), {}))
+    bm = types.ModuleType('torchaudio.backend')
+    cm = types.ModuleType('torchaudio.backend.common')
+    cm.AudioMetaData = AM
+    bm.common = cm
+    sys.modules.setdefault('torchaudio.backend', bm)
+    sys.modules['torchaudio.backend.common'] = cm
+from df import init_df
+init_df('DeepFilterNet3', log_level='none')
+print('DeepFilterNet3 ready')
+"
 
 # Copy application code
 COPY . .

@@ -23,12 +23,45 @@ _model = None
 _df_state = None
 
 
+def _patch_torchaudio_compat() -> None:
+    """
+    deepfilternet <=0.5.6 imports `torchaudio.backend.common.AudioMetaData`,
+    which was removed in torchaudio 2.1+.  Inject a shim so the import
+    succeeds with any torchaudio version.
+    """
+    import sys
+    import types
+    try:
+        from torchaudio.backend.common import AudioMetaData  # noqa: F401
+        return  # already works — nothing to do
+    except (ImportError, ModuleNotFoundError):
+        pass
+
+    import torchaudio
+    # AudioMetaData moved to torchaudio directly in newer versions
+    AudioMetaData = getattr(torchaudio, "AudioMetaData", None)
+    if AudioMetaData is None:
+        # Last resort: build a minimal stub so the import at least doesn't crash
+        AudioMetaData = type("AudioMetaData", (), {})
+
+    backend_mod = types.ModuleType("torchaudio.backend")
+    common_mod  = types.ModuleType("torchaudio.backend.common")
+    common_mod.AudioMetaData = AudioMetaData
+    backend_mod.common = common_mod
+
+    sys.modules.setdefault("torchaudio.backend", backend_mod)
+    sys.modules["torchaudio.backend.common"] = common_mod
+    if not hasattr(torchaudio, "backend"):
+        torchaudio.backend = backend_mod
+
+
 def is_deepfilter_available() -> bool:
     """Return True if deepfilternet is installed."""
     try:
+        _patch_torchaudio_compat()
         import df  # noqa: F401
         return True
-    except ImportError:
+    except (ImportError, Exception):
         return False
 
 
@@ -39,6 +72,7 @@ def _load_model():
     if _model is not None:
         return _model, _df_state
 
+    _patch_torchaudio_compat()
     from df import init_df
 
     print("🔊 Loading DeepFilterNet3 model…")
