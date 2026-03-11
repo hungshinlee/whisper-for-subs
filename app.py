@@ -795,11 +795,11 @@ def create_interface() -> gr.Blocks:
                 info="Note: large-v3-turbo only supports Transcribe",
             ) if model_name == "large-v3-turbo" else gr.update(interactive=True, info=None)
 
-            # Switching TO a Hakka model: show llm_col, but leave the checkbox
-            # value alone — gr.Examples may have already set it to True.
+            # Switching TO a Hakka model: show llm_col and reset the checkbox
+            # to True (預設開啟).
             # Switching AWAY from a Hakka model: hide llm_col and reset the
             # checkbox to False so stale state doesn't bleed into other models.
-            checkbox_update = gr.update() if is_hakka else gr.update(value=False)
+            checkbox_update = gr.update(value=True) if is_hakka else gr.update(value=False)
 
             return (
                 language_update,
@@ -891,8 +891,6 @@ def create_interface() -> gr.Blocks:
             model_size="formospeech/whisper-large-v2-taiwanese-hakka-v1",
             language="zh",
             task="transcribe",
-            translate_hakka=True,
-            llm_system_prompt=DEFAULT_SYSTEM_PROMPT,
         )
 
         gr.Examples(
@@ -903,8 +901,6 @@ def create_interface() -> gr.Blocks:
                     _EXAMPLE_DEFAULTS["model_size"],
                     _EXAMPLE_DEFAULTS["language"],
                     _EXAMPLE_DEFAULTS["task"],
-                    _EXAMPLE_DEFAULTS["translate_hakka"],
-                    _EXAMPLE_DEFAULTS["llm_system_prompt"],
                     "下二隻月就愛過年吔，魚仔相關个產品就開始起價，因為呢愛分民眾在防疫期間乜買得著萋萋个魚貨，苗栗魚市場就特別推出咧限量个過年禮盒，用網路，注文還過送貨到屋个服務，還過較便宜个價數，分苗栗鄉親在屋下裡肚，乜買得著萋萋又有保障个魚貨。",
                 ],
                 [
@@ -913,8 +909,6 @@ def create_interface() -> gr.Blocks:
                     _EXAMPLE_DEFAULTS["model_size"],
                     _EXAMPLE_DEFAULTS["language"],
                     _EXAMPLE_DEFAULTS["task"],
-                    _EXAMPLE_DEFAULTS["translate_hakka"],
-                    _EXAMPLE_DEFAULTS["llm_system_prompt"],
                     "這隻世界項有當多人高不將愛摎自家个夢想放忒去，你既然做得追求你个夢想，你就愛認真煞猛分佢兜試著當見笑啊。",
                 ],
             ],
@@ -924,8 +918,6 @@ def create_interface() -> gr.Blocks:
                 model_dropdown,
                 language_radio,
                 task_radio,
-                translate_hakka_checkbox,
-                llm_prompt_textbox,
                 ground_truth_textbox,
             ],
             label="客語辨識 + LLM 翻譯範例",
