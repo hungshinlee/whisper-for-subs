@@ -669,7 +669,7 @@ def create_interface() -> gr.Blocks:
                 # Speech Enhancement controls
                 with gr.Column(visible=True) as enhancement_col:
                     use_enhancement_checkbox = gr.Checkbox(
-                        value=False,
+                        value=True,
                         label="🔊 Speech Enhancement (DeepFilterNet3)",
                         interactive=SPEECH_ENHANCEMENT_AVAILABLE,
                         info=None if SPEECH_ENHANCEMENT_AVAILABLE
@@ -679,7 +679,7 @@ def create_interface() -> gr.Blocks:
                         minimum=0.0, maximum=1.0, value=1.0, step=0.05,
                         label="Enhancement Blend (0 = original, 1 = fully enhanced)",
                         visible=True,
-                        interactive=False,
+                        interactive=True,
                     )
 
                 # LLM controls — wrapped in Column to avoid Gradio hidden-element event bugs
