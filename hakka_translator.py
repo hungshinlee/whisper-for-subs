@@ -90,7 +90,7 @@ def build_lexicon_hint(texts: List[str], lexicon: Dict[str, List[str]]) -> str:
     lines = [f"{hakka} → {'／'.join(mandarin)}" for hakka, mandarin in matched.items()]
     hint = (
         "\n【客語詞彙對照表】"
-        "下列詞彙為標準對等譯法，請優先採用，並依上下文調整為最自然的總呈方式：\n"
+        "下列詞彙為標準對等譯法，請盡量參考，並依上下文調整為最自然的總呈方式：\n"
         + "\n".join(lines)
     )
     return hint
@@ -105,7 +105,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "2. 保持與原文相近的句子長度。\n"
     "3. 若原文已是繁體中文，則原文照傳回。\n"
     "4. 一行輸入對應一行輸出，行數必須完全相同。\n"
-    "5. 若提供了【客語詞彙對照表】，總譯時必須優先採用其中的詞彙，非必要時才可依上下文微調。"
+    # "5. 若提供了【客語詞彙對照表】，總譯時必須優先採用其中的詞彙，非必要時才可依上下文微調。"
 )
 
 
