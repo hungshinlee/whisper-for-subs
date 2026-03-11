@@ -5,6 +5,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# DeepFilterNet3 model baked into the image at a fixed path
+ENV DF_PRETRAINED_MODELS_PATH=/app/models
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3.11 \
@@ -34,7 +37,8 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Download Silero VAD model during build
 RUN python -c "import torch; torch.hub.load('snakers4/silero-vad', 'silero_vad', force_reload=True)"
 
-# Download DeepFilterNet3 model during build (with torchaudio compat shim)
+# Download DeepFilterNet3 model into the image (DF_PRETRAINED_MODELS_PATH=/app/models)
+# Model files (~30 MB) are baked in so runtime never needs network access for this.
 COPY preload_deepfilter.py /tmp/preload_deepfilter.py
 RUN python /tmp/preload_deepfilter.py
 

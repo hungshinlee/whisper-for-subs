@@ -9,12 +9,14 @@ then blended with the original according to `mix_factor`:
 
 mix_factor = 1.0  →  fully enhanced  (default)
 mix_factor = 0.0  →  original only   (effectively disabled)
+
+The model is loaded lazily on the first call to enhance_audio() / _load_model().
+is_deepfilter_available() uses importlib.util.find_spec() — no import, instant.
 """
 
 import os
 import logging
 import numpy as np
-from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +27,9 @@ _df_state = None
 
 def _patch_torchaudio_compat() -> None:
     """
-    deepfilternet <=0.5.6 imports `torchaudio.backend.common.AudioMetaData`,
-    which was removed in torchaudio 2.1+.  Inject a shim so the import
-    succeeds with any torchaudio version.
+    deepfilternet <=0.5.6 imports torchaudio.backend.common.AudioMetaData,
+    which was removed in torchaudio 2.1+.  Inject a stub module so the
+    import succeeds with any torchaudio version.
     """
     import sys
     import types
@@ -38,25 +40,24 @@ def _patch_torchaudio_compat() -> None:
         pass
 
     import torchaudio
-    # AudioMetaData moved to torchaudio directly in newer versions
-    AudioMetaData = getattr(torchaudio, "AudioMetaData", None)
-    if AudioMetaData is None:
-        # Last resort: build a minimal stub so the import at least doesn't crash
-        AudioMetaData = type("AudioMetaData", (), {})
-
-    backend_mod = types.ModuleType("torchaudio.backend")
-    common_mod  = types.ModuleType("torchaudio.backend.common")
-    common_mod.AudioMetaData = AudioMetaData
-    backend_mod.common = common_mod
-
-    sys.modules.setdefault("torchaudio.backend", backend_mod)
-    sys.modules["torchaudio.backend.common"] = common_mod
+    AM = getattr(torchaudio, "AudioMetaData", type("AudioMetaData", (), {}))
+    bm = types.ModuleType("torchaudio.backend")
+    cm = types.ModuleType("torchaudio.backend.common")
+    cm.AudioMetaData = AM
+    bm.common = cm
+    sys.modules.setdefault("torchaudio.backend", bm)
+    sys.modules["torchaudio.backend.common"] = cm
     if not hasattr(torchaudio, "backend"):
-        torchaudio.backend = backend_mod
+        torchaudio.backend = bm
 
 
 def is_deepfilter_available() -> bool:
-    """Return True if deepfilternet is installed (no-import check, instant)."""
+    """
+    Return True if deepfilternet is installed.
+
+    Uses importlib.util.find_spec — no import, no Rust extension loading,
+    executes in microseconds.  Safe to call at module import time.
+    """
     import importlib.util
     return importlib.util.find_spec("df") is not None
 
@@ -71,16 +72,16 @@ def _load_model():
     _patch_torchaudio_compat()
     from df import init_df
 
-    import torch
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"🔊 Loading DeepFilterNet3 model on {device}…")
-    _model, _df_state, _ = init_df(
-        "DeepFilterNet3",
-        log_level="none",
-    )
-    _model = _model.to(device)
-    _model.eval()
-    print(f"✅ DeepFilterNet3 loaded on {device} (sample rate: {_df_state.sr()} Hz)")
+    # DF_PRETRAINED_MODELS_PATH is set in the Dockerfile to /app/models so that
+    # the model baked into the image is found without any network access.
+    # The subdirectory name deepfilternet uses is "DeepFilterNet3".
+    model_base = os.environ.get("DF_PRETRAINED_MODELS_PATH", "")
+    candidate = os.path.join(model_base, "DeepFilterNet3") if model_base else ""
+    init_arg = candidate if (candidate and os.path.isdir(candidate)) else "DeepFilterNet3"
+
+    print(f"🔊 Loading DeepFilterNet3 from '{init_arg}' …")
+    _model, _df_state, _ = init_df(init_arg, log_level="none")
+    print(f"✅ DeepFilterNet3 loaded (sample rate: {_df_state.sr()} Hz)")
     return _model, _df_state
 
 
@@ -123,6 +124,7 @@ def enhance_audio(
         audio_up = audio.astype(np.float32)
 
     # ── Enhance ────────────────────────────────────────────────────────
+    _patch_torchaudio_compat()
     from df import enhance as df_enhance
 
     # enhance() expects a (C, T) float32 tensor
@@ -145,7 +147,6 @@ def enhance_audio(
 def enhance_file(
     input_path: str,
     output_path: str,
-    sr: int = 16_000,
     mix_factor: float = 1.0,
 ) -> str:
     """
