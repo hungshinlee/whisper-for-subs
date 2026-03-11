@@ -356,9 +356,17 @@ class WhisperTranscriber:
         initial_prompt: Optional[str] = None,
         word_timestamps: bool = True,
         progress_callback=None,
+        vad_chunks=None,
     ) -> List[dict]:
         """
         Transcribe audio file.
+
+        Args:
+            vad_chunks: Optional pre-computed VAD chunks from an external VAD step
+                        (list of (start, end, audio_data) tuples).  When provided,
+                        the internal VAD step is skipped so that speech detection
+                        always runs on the (potentially enhanced) audio before this
+                        method is called.
 
         Returns:
             List of segments with start, end, text, no_speech_prob, and words.
@@ -379,11 +387,14 @@ class WhisperTranscriber:
             progress_callback(5, f"Audio duration: {duration:.1f} seconds")
 
         if self.use_vad and self.vad is not None:
-            if progress_callback:
+            if vad_chunks is not None:
+                print(f"🎯 Using pre-computed VAD: {len(vad_chunks)} chunk(s) — skipping internal VAD")
+            elif progress_callback:
                 progress_callback(10, "Detecting speech segments with VAD...")
             segments = self._transcribe_with_vad(
                 audio, duration, language, task, initial_prompt, word_timestamps,
                 progress_callback,
+                precomputed_chunks=vad_chunks,
             )
         else:
             segments = self._transcribe_direct(
@@ -415,14 +426,18 @@ class WhisperTranscriber:
         initial_prompt: Optional[str],
         word_timestamps: bool,
         progress_callback=None,
+        precomputed_chunks=None,
     ) -> List[dict]:
         """Transcribe using VAD segmentation."""
-        chunks = self.vad.segment_audio(
-            audio,
-            merge=True,
-            min_duration=0.5,
-            max_duration=30.0,
-        )
+        if precomputed_chunks is not None:
+            chunks = precomputed_chunks
+        else:
+            chunks = self.vad.segment_audio(
+                audio,
+                merge=True,
+                min_duration=0.5,
+                max_duration=30.0,
+            )
 
         if not chunks:
             print("⚠ No speech detected in audio")

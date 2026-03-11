@@ -38,6 +38,8 @@ from hakka_translator import (
     pull_model_if_needed,
     DEFAULT_SYSTEM_PROMPT,
 )
+import numpy as np
+from vad import SileroVAD
 from speech_enhancer import is_deepfilter_available, enhance_file
 
 SPEECH_ENHANCEMENT_AVAILABLE = is_deepfilter_available()
@@ -374,6 +376,27 @@ def process_audio(
         use_parallel = use_multi_gpu and audio_duration >= 300
         num_gpus_used = 1
 
+        # ── VAD (single-GPU only; parallel transcriber handles its own VAD) ──
+        # Running VAD here — after enhancement — guarantees speech detection
+        # always operates on the cleaned-up audio.
+        vad_chunks = None
+        if use_vad and not use_parallel:
+            yield prog(32, "Detecting speech segments with VAD...")
+            _vad = SileroVAD(min_silence_duration_ms=int(min_silence_duration_s * 1000))
+            _audio, _sr = sf.read(audio_path, dtype="float32")
+            if _audio.ndim == 2:
+                _audio = _audio.mean(axis=1)
+            if _sr != 16000:
+                from scipy import signal as _sig
+                _audio = _sig.resample(_audio, int(len(_audio) * 16000 / _sr)).astype(np.float32)
+            vad_chunks = _vad.segment_audio(_audio, merge=True, min_duration=0.5, max_duration=30.0)
+            n_chunks = len(vad_chunks)
+            print(f"🎯 VAD detected {n_chunks} speech segment(s)")
+            if n_chunks == 0:
+                yield "⚠️ No speech detected", "", None, *_NO_TRANSLATION
+                return
+            yield prog(34, f"VAD: {n_chunks} speech segment(s) detected")
+
         if use_parallel:
             is_parallel = True
             yield prog(35, "Loading models on multiple GPUs...")
@@ -406,6 +429,7 @@ def process_audio(
                 language=language if language != "auto" else None,
                 task=task,
                 progress_callback=None,
+                vad_chunks=vad_chunks,  # pre-computed from enhanced audio
             )
 
         yield prog(85, "Transcription complete")
