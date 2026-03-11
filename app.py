@@ -38,6 +38,9 @@ from hakka_translator import (
     pull_model_if_needed,
     DEFAULT_SYSTEM_PROMPT,
 )
+from speech_enhancer import is_deepfilter_available, enhance_file
+
+SPEECH_ENHANCEMENT_AVAILABLE = is_deepfilter_available()
 
 # Whether LLM translation is available in this deployment
 LLM_ENABLED = is_llm_enabled()
@@ -270,6 +273,8 @@ def process_audio(
     use_multi_gpu: bool,
     translate_hakka: bool = False,
     llm_system_prompt: str = "",
+    use_enhancement: bool = False,
+    enhancement_mix: float = 1.0,
 ) -> Generator:
     """
     Process audio from file or YouTube URL.
@@ -341,6 +346,21 @@ def process_audio(
         else:
             yield "❌ Please upload an audio file or enter a YouTube URL", "", None, *_NO_TRANSLATION
             return
+
+        # ── Speech Enhancement ──────────────────────────────────────────
+        if use_enhancement and SPEECH_ENHANCEMENT_AVAILABLE and enhancement_mix > 0.0:
+            yield prog(28, f"Enhancing speech (DeepFilterNet3, mix={enhancement_mix:.2f})…")
+            enhanced_path = os.path.join(
+                session_dir,
+                f"enhanced_{uuid.uuid4().hex[:8]}{os.path.splitext(audio_path)[1]}",
+            )
+            try:
+                enhance_file(audio_path, enhanced_path, mix_factor=enhancement_mix)
+                audio_path = enhanced_path
+                temp_files.append(enhanced_path)
+                print(f"✅ Speech enhancement applied (mix={enhancement_mix:.2f})")
+            except Exception as e:
+                print(f"⚠️  Speech enhancement failed, continuing without it: {e}")
 
         try:
             audio_info = sf.info(audio_path)
@@ -622,6 +642,21 @@ def create_interface() -> gr.Blocks:
                     merge_checkbox     = gr.Checkbox(value=True,  label="Merge Short Subtitles")
                     zh_conv_checkbox   = gr.Checkbox(value=False, label="Convert to zh-TW")
 
+                # Speech Enhancement controls
+                with gr.Column(visible=True) as enhancement_col:
+                    use_enhancement_checkbox = gr.Checkbox(
+                        value=False,
+                        label="🔊 Speech Enhancement (DeepFilterNet3)",
+                        interactive=SPEECH_ENHANCEMENT_AVAILABLE,
+                        info=None if SPEECH_ENHANCEMENT_AVAILABLE
+                             else "deepfilternet not installed",
+                    )
+                    enhancement_mix_slider = gr.Slider(
+                        minimum=0.0, maximum=1.0, value=1.0, step=0.05,
+                        label="Enhancement Blend (0 = original, 1 = fully enhanced)",
+                        visible=False,
+                    )
+
                 # LLM controls — wrapped in Column to avoid Gradio hidden-element event bugs
                 with gr.Column(visible=False) as llm_col:
                     translate_hakka_checkbox = gr.Checkbox(
@@ -704,6 +739,8 @@ def create_interface() -> gr.Blocks:
                 multi_gpu_checkbox,
                 translate_hakka_checkbox,
                 llm_prompt_textbox,
+                use_enhancement_checkbox,
+                enhancement_mix_slider,
             ],
             outputs=[
                 status_text,
@@ -765,6 +802,12 @@ def create_interface() -> gr.Blocks:
             fn=lambda checked: gr.update(visible=checked),
             inputs=[translate_hakka_checkbox],
             outputs=[llm_prompt_textbox],
+        )
+
+        use_enhancement_checkbox.change(
+            fn=lambda checked: gr.update(visible=checked),
+            inputs=[use_enhancement_checkbox],
+            outputs=[enhancement_mix_slider],
         )
 
         audio_input.change(

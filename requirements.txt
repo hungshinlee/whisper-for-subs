@@ -18,6 +18,9 @@ soundfile>=0.12.1
 numpy>=1.24.0
 scipy>=1.10.0  # For audio resampling
 
+# Speech Enhancement
+deepfilternet  # DeepFilterNet3 noise suppression
+
 # Utilities
 ffmpeg-python>=0.2.0
 requests>=2.31.0
