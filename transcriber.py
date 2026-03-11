@@ -267,6 +267,58 @@ def filter_repetition_loops(segments: List[dict], max_token_chars: int = 4) -> L
     return [s for i, s in enumerate(segments) if i in keep]
 
 
+def filter_short_token_bursts(segments: List[dict], max_token_chars: int = 2, min_burst: int = 2) -> List[dict]:
+    """
+    Remove bursts of consecutive very-short segments that signal a Whisper
+    "counting / enumerating" hallucination (e.g. 一。二。三。 or 𠊎。一。二。).
+
+    This complements filter_repetition_loops(): that filter catches runs of
+    *identical* short tokens; this one catches runs of *different* short tokens.
+
+    Rules:
+    - Normalize each segment text (strip punctuation + whitespace).
+    - Find runs of >= min_burst consecutive segments whose normalized text is
+      <= max_token_chars characters.
+    - Remove the entire run.
+    - Single isolated short segments are left untouched (conservative).
+
+    Args:
+        segments:        List of segment dicts with 'text' key.
+        max_token_chars: Normalized-text length threshold.  Default 2.
+        min_burst:       Minimum consecutive short segments to trigger removal.
+                         Default 2 (i.e. two or more in a row).
+
+    Returns:
+        Filtered segment list.
+    """
+    if not segments:
+        return segments
+
+    is_short = [len(_normalize(s["text"])) <= max_token_chars for s in segments]
+
+    # Build runs of consecutive short segments
+    to_remove: set = set()
+    i = 0
+    while i < len(segments):
+        if is_short[i]:
+            run_start = i
+            while i < len(segments) and is_short[i]:
+                i += 1
+            run_len = i - run_start
+            if run_len >= min_burst:
+                for j in range(run_start, run_start + run_len):
+                    to_remove.add(j)
+        else:
+            i += 1
+
+    if to_remove:
+        removed_texts = [segments[i]["text"].strip() for i in sorted(to_remove)]
+        print(f"🔢 Removed {len(to_remove)} short-token-burst segment(s): "
+              f"{removed_texts[:6]}{'…' if len(removed_texts) > 6 else ''}")
+
+    return [s for i, s in enumerate(segments) if i not in to_remove]
+
+
 def filter_hallucinations(segments: List[dict]) -> List[dict]:
     """
     Remove hallucinated segments produced by Whisper at end-of-audio silence.
@@ -482,6 +534,7 @@ class WhisperTranscriber:
             )
 
         segments = filter_repetition_loops(segments)
+        segments = filter_short_token_bursts(segments)
         segments = filter_hallucinations(segments)
 
         elapsed = time.time() - start_time

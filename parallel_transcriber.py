@@ -15,7 +15,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import soundfile as sf
 
-from transcriber import WhisperTranscriber, ensure_model_ready, filter_hallucinations, filter_repetition_loops
+from transcriber import WhisperTranscriber, ensure_model_ready, filter_hallucinations, filter_repetition_loops, filter_short_token_bursts
 from vad import SileroVAD
 from chinese_converter import convert_segments_to_traditional, get_converter
 
@@ -335,6 +335,7 @@ class ParallelWhisperTranscriber:
 
         # Final repetition-loop + hallucination filter on the merged result
         all_segments = filter_repetition_loops(all_segments)
+        all_segments = filter_short_token_bursts(all_segments)
         all_segments = filter_hallucinations(all_segments)
 
         elapsed = time.time() - start_time
