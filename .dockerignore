@@ -33,7 +33,11 @@ docs/
 uploads/
 outputs/
 *.srt
-*.wav
+*.log
+
+# Audio/video files — EXCEPT samples/ (used as demo examples in the UI)
 *.mp3
 *.mp4
-*.log
+*.wav
+!samples/*.wav
+!samples/*.mp3

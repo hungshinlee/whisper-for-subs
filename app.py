@@ -733,13 +733,19 @@ def create_interface() -> gr.Blocks:
                 info="Note: large-v3-turbo only supports Transcribe",
             ) if model_name == "large-v3-turbo" else gr.update(interactive=True, info=None)
 
+            # Switching TO a Hakka model: show llm_col, but leave the checkbox
+            # value alone — gr.Examples may have already set it to True.
+            # Switching AWAY from a Hakka model: hide llm_col and reset the
+            # checkbox to False so stale state doesn't bleed into other models.
+            checkbox_update = gr.update() if is_hakka else gr.update(value=False)
+
             return (
                 language_update,
                 task_update,
-                gr.update(visible=is_hakka),   # llm_col
-                gr.update(value=False),         # translate_hakka_checkbox reset
-                gr.update(visible=False),       # llm_prompt_textbox hide
-                gr.update(visible=False),       # translated_col hide on model switch
+                gr.update(visible=is_hakka),  # llm_col
+                checkbox_update,              # translate_hakka_checkbox
+                gr.update(visible=False),     # llm_prompt_textbox hide
+                gr.update(visible=False),     # translated_col hide on model switch
             )
 
         model_dropdown.change(
