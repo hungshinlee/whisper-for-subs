@@ -796,40 +796,47 @@ def create_interface() -> gr.Blocks:
                 llm_prompt_textbox,
                 translated_col,
             ],
+            queue=False,
         )
 
         translate_hakka_checkbox.change(
             fn=lambda checked: gr.update(visible=checked),
             inputs=[translate_hakka_checkbox],
             outputs=[llm_prompt_textbox],
+            queue=False,
         )
 
         use_enhancement_checkbox.change(
             fn=lambda checked: gr.update(visible=checked),
             inputs=[use_enhancement_checkbox],
             outputs=[enhancement_mix_slider],
+            queue=False,
         )
 
         audio_input.change(
             fn=lambda x: "" if x else gr.update(),
             inputs=[audio_input],
             outputs=[youtube_input],
+            queue=False,
         )
         youtube_input.change(
             fn=lambda x: None if x else gr.update(),
             inputs=[youtube_input],
             outputs=[audio_input],
+            queue=False,
         )
 
         merge_checkbox.change(
             fn=lambda x: gr.update(visible=x),
             inputs=[merge_checkbox],
             outputs=[max_chars_slider],
+            queue=False,
         )
         use_vad_checkbox.change(
             fn=lambda x: gr.update(visible=x),
             inputs=[use_vad_checkbox],
             outputs=[min_silence_slider],
+            queue=False,
         )
 
         # Copy buttons
