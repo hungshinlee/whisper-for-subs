@@ -800,6 +800,56 @@ def create_interface() -> gr.Blocks:
             fn=None, inputs=[translated_srt_output], outputs=[trans_copy_status], js=_COPY_JS,
         )
 
+        # ── Examples ────────────────────────────────────────────────────
+        gr.Markdown("### 📋 Examples")
+
+        # Ground truth textbox — read-only, populated when an example is clicked
+        ground_truth_textbox = gr.Textbox(
+            label="Ground Truth (客語漢字)",
+            info="此範例音檔的標準參考文字",
+            interactive=False,
+            lines=3,
+        )
+
+        gr.Examples(
+            examples=[
+                [
+                    "samples/734a04794010481cb3eed411b6e005cc.wav",   # audio_file
+                    "",                                                 # youtube_url
+                    "formospeech/whisper-large-v3-taiwanese-hakka",    # model_size
+                    "zh",                                               # language
+                    "transcribe",                                       # task
+                    True,                                               # use_vad
+                    0.1,                                                # min_silence_duration_s
+                    True,                                               # merge_subtitles
+                    False,                                              # convert_to_traditional
+                    80,                                                 # max_chars
+                    True,                                               # use_multi_gpu
+                    True,                                               # translate_hakka
+                    DEFAULT_SYSTEM_PROMPT,                              # llm_system_prompt
+                    # ground truth (last column — shown in table, fills textbox)
+                    "下二隻月就愛過年吔，魚仔相關个產品就開始起價，因為呢愛分民眾在防疫期間乜買得著萋萋个魚貨，苗栗魚市場就特別推出咧限量个過年禮盒，用網路，注文還過送貨到屋个服務，還過較便宜个價數，分苗栗鄉親在屋下裡肚，乜買得著萋萋又有保障个魚貨。",
+                ],
+            ],
+            inputs=[
+                audio_input,
+                youtube_input,
+                model_dropdown,
+                language_radio,
+                task_radio,
+                use_vad_checkbox,
+                min_silence_slider,
+                merge_checkbox,
+                zh_conv_checkbox,
+                max_chars_slider,
+                multi_gpu_checkbox,
+                translate_hakka_checkbox,
+                llm_prompt_textbox,
+                ground_truth_textbox,
+            ],
+            label="客語辨識 + LLM 翻譯範例",
+        )
+
     return app
 
 
