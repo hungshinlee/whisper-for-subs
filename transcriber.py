@@ -188,6 +188,85 @@ def _is_hallucination(text: str, no_speech_prob: float) -> bool:
     return False
 
 
+def _normalize(text: str) -> str:
+    """Strip punctuation and whitespace for repetition comparison."""
+    return re.sub(r'[\s\u3000\u0020。！？，、；：.!?,;:\-…⋯♪～]+', '', text)
+
+
+def filter_repetition_loops(segments: List[dict], max_token_chars: int = 4) -> List[dict]:
+    """
+    Remove Whisper "repetition loop" hallucinations — consecutive segments
+    whose normalized text is identical.
+
+    Whisper sometimes gets stuck on a short token (e.g. 好 / 細義 / 啊)
+    in low-energy or noisy audio and emits it repeatedly.  Unlike
+    filter_hallucinations(), this filter operates on ALL positions in the
+    segment list, not just the tail.
+
+    Rules:
+    - Normalize each segment text (strip punctuation + whitespace).
+    - Find runs of ≥ 2 consecutive segments with the same normalized text.
+    - If the normalized text is ≤ max_token_chars characters (short token):
+        remove the ENTIRE run.
+    - If the normalized text is > max_token_chars characters (long text):
+        keep only the FIRST occurrence, remove the rest.  This is the
+        conservative path that avoids accidentally deleting legitimate
+        repeated sentences.
+
+    Args:
+        segments:        List of segment dicts with 'text' key.
+        max_token_chars: Char threshold between "remove all" and
+                         "keep first" strategy.  Default 4.
+
+    Returns:
+        Filtered segment list.
+    """
+    if not segments:
+        return segments
+
+    # Group segments into consecutive runs by normalized text
+    runs: List[List[int]] = []   # each inner list = indices of one run
+    current_run = [0]
+    current_norm = _normalize(segments[0]["text"])
+
+    for i in range(1, len(segments)):
+        norm = _normalize(segments[i]["text"])
+        if norm == current_norm:
+            current_run.append(i)
+        else:
+            runs.append(current_run)
+            current_run = [i]
+            current_norm = norm
+    runs.append(current_run)
+
+    keep = set()
+    removed_texts = []
+
+    for run in runs:
+        if len(run) == 1:
+            keep.add(run[0])
+            continue
+
+        norm = _normalize(segments[run[0]]["text"])
+        is_short = len(norm) <= max_token_chars
+
+        if is_short:
+            # Short token repeated ≥ 2 times → remove entire run
+            for idx in run:
+                removed_texts.append(segments[idx]["text"].strip())
+        else:
+            # Long text repeated → keep first, remove rest
+            keep.add(run[0])
+            for idx in run[1:]:
+                removed_texts.append(segments[idx]["text"].strip())
+
+    if removed_texts:
+        print(f"🔁 Removed {len(removed_texts)} repetition-loop segment(s): "
+              f"{removed_texts[:6]}{'…' if len(removed_texts) > 6 else ''}")
+
+    return [s for i, s in enumerate(segments) if i in keep]
+
+
 def filter_hallucinations(segments: List[dict]) -> List[dict]:
     """
     Remove hallucinated segments produced by Whisper at end-of-audio silence.
@@ -402,6 +481,7 @@ class WhisperTranscriber:
                 progress_callback,
             )
 
+        segments = filter_repetition_loops(segments)
         segments = filter_hallucinations(segments)
 
         elapsed = time.time() - start_time
