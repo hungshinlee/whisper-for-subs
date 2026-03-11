@@ -654,7 +654,8 @@ def create_interface() -> gr.Blocks:
                     enhancement_mix_slider = gr.Slider(
                         minimum=0.0, maximum=1.0, value=1.0, step=0.05,
                         label="Enhancement Blend (0 = original, 1 = fully enhanced)",
-                        visible=False,
+                        visible=True,
+                        interactive=False,
                     )
 
                 # LLM controls — wrapped in Column to avoid Gradio hidden-element event bugs
@@ -779,10 +780,10 @@ def create_interface() -> gr.Blocks:
             return (
                 language_update,
                 task_update,
-                gr.update(visible=is_hakka),  # llm_col
-                checkbox_update,              # translate_hakka_checkbox
-                gr.update(visible=False),     # llm_prompt_textbox hide
-                gr.update(visible=False),     # translated_col hide on model switch
+                gr.update(visible=is_hakka),   # llm_col
+                checkbox_update,               # translate_hakka_checkbox
+                gr.update(visible=is_hakka),   # llm_prompt_textbox: show when Hakka model selected
+                gr.update(visible=False),      # translated_col hide on model switch
             )
 
         model_dropdown.change(
@@ -799,18 +800,12 @@ def create_interface() -> gr.Blocks:
             queue=False,
         )
 
-        translate_hakka_checkbox.change(
-            fn=lambda checked: gr.update(visible=checked),
-            inputs=[translate_hakka_checkbox],
-            outputs=[llm_prompt_textbox],
-            queue=False,
-        )
-
         use_enhancement_checkbox.change(
-            fn=lambda checked: gr.update(visible=checked),
+            fn=lambda checked: gr.update(interactive=checked),
             inputs=[use_enhancement_checkbox],
             outputs=[enhancement_mix_slider],
             queue=False,
+            show_progress="hidden",
         )
 
         audio_input.change(
