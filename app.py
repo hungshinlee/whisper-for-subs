@@ -695,7 +695,7 @@ def create_interface() -> gr.Blocks:
                         label="🤖 LLM System Prompt",
                         info="可自訂翻譯指令，留空則使用預設 Prompt",
                         lines=6,
-                        visible=False,
+                        visible=True,
                     )
 
                 min_silence_slider = gr.Slider(
