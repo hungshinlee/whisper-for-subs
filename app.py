@@ -817,24 +817,54 @@ def create_interface() -> gr.Blocks:
             lines=3,
         )
 
+        _EXAMPLE_DEFAULTS = dict(
+            youtube_url="",
+            model_size="formospeech/whisper-large-v2-taiwanese-hakka-v1",
+            language="zh",
+            task="transcribe",
+            use_vad=True,
+            min_silence_duration_s=0.1,
+            merge_subtitles=True,
+            convert_to_traditional=False,
+            max_chars=80,
+            use_multi_gpu=True,
+            translate_hakka=True,
+            llm_system_prompt=DEFAULT_SYSTEM_PROMPT,
+        )
+
         gr.Examples(
             examples=[
                 [
-                    "samples/734a04794010481cb3eed411b6e005cc.wav",   # audio_file
-                    "",                                                 # youtube_url
-                    "formospeech/whisper-large-v3-taiwanese-hakka",    # model_size
-                    "zh",                                               # language
-                    "transcribe",                                       # task
-                    True,                                               # use_vad
-                    0.1,                                                # min_silence_duration_s
-                    True,                                               # merge_subtitles
-                    False,                                              # convert_to_traditional
-                    80,                                                 # max_chars
-                    True,                                               # use_multi_gpu
-                    True,                                               # translate_hakka
-                    DEFAULT_SYSTEM_PROMPT,                              # llm_system_prompt
-                    # ground truth (last column — shown in table, fills textbox)
+                    "samples/734a04794010481cb3eed411b6e005cc.wav",
+                    _EXAMPLE_DEFAULTS["youtube_url"],
+                    _EXAMPLE_DEFAULTS["model_size"],
+                    _EXAMPLE_DEFAULTS["language"],
+                    _EXAMPLE_DEFAULTS["task"],
+                    _EXAMPLE_DEFAULTS["use_vad"],
+                    _EXAMPLE_DEFAULTS["min_silence_duration_s"],
+                    _EXAMPLE_DEFAULTS["merge_subtitles"],
+                    _EXAMPLE_DEFAULTS["convert_to_traditional"],
+                    _EXAMPLE_DEFAULTS["max_chars"],
+                    _EXAMPLE_DEFAULTS["use_multi_gpu"],
+                    _EXAMPLE_DEFAULTS["translate_hakka"],
+                    _EXAMPLE_DEFAULTS["llm_system_prompt"],
                     "下二隻月就愛過年吔，魚仔相關个產品就開始起價，因為呢愛分民眾在防疫期間乜買得著萋萋个魚貨，苗栗魚市場就特別推出咧限量个過年禮盒，用網路，注文還過送貨到屋个服務，還過較便宜个價數，分苗栗鄉親在屋下裡肚，乜買得著萋萋又有保障个魚貨。",
+                ],
+                [
+                    "samples/874062dc1657497b9ac996971c9ce4bb.wav",
+                    _EXAMPLE_DEFAULTS["youtube_url"],
+                    _EXAMPLE_DEFAULTS["model_size"],
+                    _EXAMPLE_DEFAULTS["language"],
+                    _EXAMPLE_DEFAULTS["task"],
+                    _EXAMPLE_DEFAULTS["use_vad"],
+                    _EXAMPLE_DEFAULTS["min_silence_duration_s"],
+                    _EXAMPLE_DEFAULTS["merge_subtitles"],
+                    _EXAMPLE_DEFAULTS["convert_to_traditional"],
+                    _EXAMPLE_DEFAULTS["max_chars"],
+                    _EXAMPLE_DEFAULTS["use_multi_gpu"],
+                    _EXAMPLE_DEFAULTS["translate_hakka"],
+                    _EXAMPLE_DEFAULTS["llm_system_prompt"],
+                    "這隻世界項有當多人高不將愛摎自家个夢想放忒去，你既然做得追求你个夢想，你就愛認真煞猛分佢兜試著當見笑啊。",
                 ],
             ],
             inputs=[

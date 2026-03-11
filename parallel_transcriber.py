@@ -15,7 +15,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import soundfile as sf
 
-from transcriber import WhisperTranscriber, ensure_model_ready
+from transcriber import WhisperTranscriber, ensure_model_ready, filter_hallucinations
 from vad import SileroVAD
 from chinese_converter import convert_segments_to_traditional, get_converter
 
@@ -53,10 +53,6 @@ def _init_worker(gpu_id: int, model_size: str, compute_type: str):
 def transcribe_segment_on_gpu(args: tuple) -> Dict:
     """
     Transcribe a single audio segment using the pre-loaded model.
-
-    Returns a dict that includes a ``words`` list so that downstream
-    punctuation insertion can use real pause timings instead of a
-    character-count heuristic.
     """
     global _worker_transcriber, _worker_gpu_id
 
@@ -95,10 +91,6 @@ def transcribe_segment_on_gpu(args: tuple) -> Dict:
 
         print(f"[GPU {gpu_id}] ▶ Processing segment {segment_idx} ({duration:.1f}s)")
 
-        # transcribe() now returns segments that already carry a "words" list
-        # (word_timestamps=True is the default).  The timestamps inside those
-        # words are relative to the chunk start, so we need to shift them by
-        # start_time to put them on the global timeline.
         segments = _worker_transcriber.transcribe(
             temp_path,
             language=language,
@@ -109,12 +101,11 @@ def transcribe_segment_on_gpu(args: tuple) -> Dict:
 
         adjusted_segments = []
         for seg in segments:
-            # Adjust segment-level timestamps
             adj = {
                 "start": start_time + seg["start"],
                 "end": start_time + seg["end"],
                 "text": seg["text"],
-                # Adjust every word's timestamps to the global timeline
+                "no_speech_prob": seg.get("no_speech_prob", 0.0),
                 "words": [
                     {
                         "word": w["word"],
@@ -201,9 +192,6 @@ class ParallelWhisperTranscriber:
     ) -> List[Dict]:
         """
         Transcribe audio file using multiple GPUs in parallel.
-
-        Returned segments include a ``words`` list with per-word timing so
-        that punctuation insertion can use real pause gaps.
         """
         start_time = time.time()
 
@@ -344,6 +332,9 @@ class ParallelWhisperTranscriber:
             print(f"⊘ {skipped} segments skipped (too short)")
 
         all_segments.sort(key=lambda x: x["start"])
+
+        # Final hallucination filter on the merged result
+        all_segments = filter_hallucinations(all_segments)
 
         elapsed = time.time() - start_time
         speed_ratio = total_duration / elapsed if elapsed > 0 else 0

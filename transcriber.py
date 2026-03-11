@@ -6,6 +6,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*", category=UserWarning)
 
 import os
+import re
 import tempfile
 import subprocess
 from typing import List, Optional, Generator
@@ -155,6 +156,74 @@ MODEL_CONFIGS = {
 
 MODEL_SIZES = list(MODEL_CONFIGS.keys())
 
+# ---------------------------------------------------------------------------
+# Hallucination filter
+# ---------------------------------------------------------------------------
+# Whisper (especially fine-tuned models) sometimes generates these short filler
+# tokens at the end of audio when there is silence or background noise.
+# We strip segments whose *entire* text matches one of these patterns (after
+# removing punctuation and whitespace).
+_HALLUCINATION_PATTERNS: List[re.Pattern] = [re.compile(p) for p in [
+    r"^好+[。！？.!?]*$",           # 好 / 好好 / 好。好。
+    r"^謝謝.*",                      # 謝謝 / 謝謝您 / 謝謝收看
+    r"^字幕.*",                      # 字幕由…
+    r"^請.*訂閱.*",                  # 請訂閱 / 請記得訂閱
+    r"^Thank[s]?\b.*",               # Thanks / Thank you
+    r"^Subtitle[s]?\b.*",
+    r"^\s*$",                        # blank
+]]
+
+# no_speech_prob threshold — segments above this are very likely silence/noise
+_NO_SPEECH_THRESHOLD = float(os.environ.get("WHISPER_NO_SPEECH_THRESHOLD", "0.8"))
+
+
+def _is_hallucination(text: str, no_speech_prob: float) -> bool:
+    """Return True if a segment looks like a Whisper hallucination."""
+    if no_speech_prob > _NO_SPEECH_THRESHOLD:
+        return True
+    stripped = text.strip()
+    for pat in _HALLUCINATION_PATTERNS:
+        if pat.match(stripped):
+            return True
+    return False
+
+
+def filter_hallucinations(segments: List[dict]) -> List[dict]:
+    """
+    Remove hallucinated segments produced by Whisper at end-of-audio silence.
+
+    Only removes segments that are flagged AND appear after the last
+    non-hallucinated segment, so genuine content is never stripped.
+    """
+    if not segments:
+        return segments
+
+    # Mark each segment
+    flags = [
+        _is_hallucination(s["text"], s.get("no_speech_prob", 0.0))
+        for s in segments
+    ]
+
+    # Find the last non-hallucinated segment
+    last_real = -1
+    for i in range(len(segments) - 1, -1, -1):
+        if not flags[i]:
+            last_real = i
+            break
+
+    if last_real == -1:
+        # Everything was flagged — return all (avoid empty output)
+        return segments
+
+    kept = segments[: last_real + 1]
+    removed = len(segments) - len(kept)
+    if removed:
+        removed_texts = [s["text"].strip() for s in segments[last_real + 1:]]
+        print(f"🧹 Removed {removed} hallucinated segment(s): {removed_texts}")
+    return kept
+
+
+# ---------------------------------------------------------------------------
 
 def _words_from_seg(seg, time_offset: float = 0.0) -> List[dict]:
     """
@@ -292,8 +361,7 @@ class WhisperTranscriber:
         Transcribe audio file.
 
         Returns:
-            List of segments with start, end, text, and words (word-level timing).
-            Each word is a dict: {word, start, end, probability}.
+            List of segments with start, end, text, no_speech_prob, and words.
         """
         import time
 
@@ -322,6 +390,8 @@ class WhisperTranscriber:
                 audio_path, language, task, initial_prompt, word_timestamps,
                 progress_callback,
             )
+
+        segments = filter_hallucinations(segments)
 
         elapsed = time.time() - start_time
         speed_ratio = duration / elapsed if elapsed > 0 else 0
@@ -400,7 +470,7 @@ class WhisperTranscriber:
                         "start": chunk_start + seg.start,
                         "end": chunk_start + seg.end,
                         "text": seg.text,
-                        # word-level timing with global timestamp offset applied
+                        "no_speech_prob": getattr(seg, "no_speech_prob", 0.0),
                         "words": _words_from_seg(seg, time_offset=chunk_start),
                     }
                     chunk_segments.append(seg_dict)
@@ -428,15 +498,7 @@ class WhisperTranscriber:
         word_timestamps: bool,
         progress_callback=None,
     ) -> List[dict]:
-        """Transcribe without VAD.
-
-        NOTE: vad_filter=False is intentional.
-        When vad_filter=True, faster-whisper creates an internal feature
-        extractor that ignores self.model.feature_extractor entirely,
-        causing n_mels mismatch errors on v3 models (expects 128, gets 80).
-        Callers (parallel_transcriber) already do VAD segmentation before
-        reaching this method, so built-in VAD is unnecessary anyway.
-        """
+        """Transcribe without VAD."""
         if progress_callback:
             progress_callback(20, "Starting transcription...")
 
@@ -446,7 +508,7 @@ class WhisperTranscriber:
             task=task,
             initial_prompt=initial_prompt,
             word_timestamps=word_timestamps,
-            vad_filter=False,  # Must be False — see docstring above
+            vad_filter=False,  # Must be False — see parallel_transcriber docstring
         )
 
         segments = []
@@ -455,7 +517,7 @@ class WhisperTranscriber:
                 "start": seg.start,
                 "end": seg.end,
                 "text": seg.text,
-                # word-level timing; no offset needed (already absolute)
+                "no_speech_prob": getattr(seg, "no_speech_prob", 0.0),
                 "words": _words_from_seg(seg, time_offset=0.0),
             })
 
