@@ -34,6 +34,9 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Download Silero VAD model during build
 RUN python -c "import torch; torch.hub.load('snakers4/silero-vad', 'silero_vad', force_reload=True)"
 
+# Download DeepFilterNet3 model during build
+RUN python -c "from df import init_df; init_df('DeepFilterNet3', log_level='none'); print('DeepFilterNet3 ready')"
+
 # Copy application code
 COPY . .
 
