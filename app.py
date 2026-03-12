@@ -24,7 +24,6 @@ from transcriber import (
     MODEL_SIZES,
     MODEL_CONFIGS,
 )
-from parallel_transcriber import ParallelWhisperTranscriber
 from youtube_downloader import (
     is_youtube_url,
     download_audio_with_progress,
@@ -90,113 +89,121 @@ textarea, input, button, select {
 
 class TranscriberPool:
     """
-    Thread-safe pool for managing transcriber instances.
-    Ensures each concurrent request can use an isolated transcriber.
+    Thread-safe pool that distributes single-GPU transcribers across all
+    available GPUs, so concurrent short-audio requests use GPU 0, 1, 2 …
+    instead of queuing on GPU 0.
+
+    GPU assignment strategy: least-loaded first.
+    Each GPU can hold at most one resident WhisperTranscriber per model.
+    When a GPU has a cached transcriber for the requested model it is
+    preferred (avoids reloading weights); otherwise the GPU with the
+    fewest active jobs is chosen.
     """
 
-    def __init__(self, max_workers: int = 2):
-        self.max_workers = max_workers
+    def __init__(self):
         self.lock = Lock()
-        self.single_gpu_pool: Dict[str, WhisperTranscriber] = {}
-        self.parallel_gpu_pool: Dict[str, ParallelWhisperTranscriber] = {}
-        self.available_single = []
-        self.available_parallel = []
+
+        # Detect GPUs available for single-GPU work.
+        # SINGLE_GPU_DEVICES env var overrides; falls back to CUDA_VISIBLE_DEVICES.
+        _gpu_str = os.environ.get(
+            "SINGLE_GPU_DEVICES",
+            os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+        )
+        if _gpu_str:
+            self.single_gpu_ids = [int(x.strip()) for x in _gpu_str.split(",") if x.strip()]
+        elif torch.cuda.is_available():
+            self.single_gpu_ids = list(range(torch.cuda.device_count()))
+        else:
+            self.single_gpu_ids = []
+
+        print(f"🎰 TranscriberPool: single-GPU slots on GPU(s) {self.single_gpu_ids}")
+
+        # gpu_id -> WhisperTranscriber (one resident transcriber per GPU)
+        self.single_gpu_pool: Dict[int, WhisperTranscriber] = {}
+        # gpu_id -> number of requests currently using that GPU
+        self.gpu_active: Dict[int, int] = {g: 0 for g in self.single_gpu_ids}
+
+
+    def _least_loaded_gpu(self) -> int:
+        """Return the GPU id with the fewest active jobs."""
+        return min(self.single_gpu_ids, key=lambda g: self.gpu_active.get(g, 0))
 
     def get_single_gpu_transcriber(
         self,
         model_size: str,
         use_vad: bool,
         min_silence_duration_s: float,
-    ) -> Tuple[WhisperTranscriber, str]:
+    ) -> Tuple[WhisperTranscriber, int]:
+        """
+        Returns (transcriber, gpu_id).  The caller must pass gpu_id to
+        release_single_gpu_transcriber() when done.
+        """
         min_silence_duration_ms = int(min_silence_duration_s * 1000)
+        device = os.environ.get("WHISPER_DEVICE", "cuda")
 
         with self.lock:
-            for worker_id in self.available_single[:]:
-                trans = self.single_gpu_pool.get(worker_id)
-                if trans and trans.model_size == model_size:
-                    self.available_single.remove(worker_id)
-                    print(f"♻️  Reusing single-GPU transcriber: {worker_id}")
-                    return trans, worker_id
+            if not self.single_gpu_ids:
+                # CPU fallback
+                if "cpu" not in self.single_gpu_pool:
+                    self.single_gpu_pool["cpu"] = WhisperTranscriber(
+                        model_size=model_size,
+                        device="cpu",
+                        compute_type="float32",
+                        use_vad=use_vad,
+                        min_silence_duration_ms=min_silence_duration_ms,
+                    )
+                return self.single_gpu_pool["cpu"], "cpu"
 
-            if len(self.single_gpu_pool) < self.max_workers:
-                worker_id = f"single_{uuid.uuid4().hex[:8]}"
+            # Prefer a GPU that already has this model loaded and is least loaded
+            cached_gpu = None
+            cached_load = float("inf")
+            for gpu_id, trans in self.single_gpu_pool.items():
+                if trans.model_size == model_size:
+                    load = self.gpu_active.get(gpu_id, 0)
+                    if load < cached_load:
+                        cached_gpu = gpu_id
+                        cached_load = load
 
-                device = os.environ.get("WHISPER_DEVICE", "cuda")
-                if device == "cuda" and torch.cuda.is_available():
-                    torch.cuda.set_device(0)
+            if cached_gpu is not None:
+                self.gpu_active[cached_gpu] += 1
+                print(f"♻️  Reusing GPU {cached_gpu} transcriber "
+                      f"(active={self.gpu_active[cached_gpu]}, model={model_size})")
+                return self.single_gpu_pool[cached_gpu], cached_gpu
 
-                trans = WhisperTranscriber(
-                    model_size=model_size,
-                    device=device,
-                    compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "float16"),
-                    use_vad=use_vad,
-                    min_silence_duration_ms=min_silence_duration_ms,
-                )
+            # No cached model — pick least-loaded GPU and load there
+            gpu_id = self._least_loaded_gpu()
 
-                self.single_gpu_pool[worker_id] = trans
-                print(f"✨ Created new single-GPU transcriber: {worker_id}")
-                return trans, worker_id
+            # If this GPU already has a transcriber for a different model, replace it
+            if gpu_id in self.single_gpu_pool:
+                print(f"🔄 GPU {gpu_id}: replacing "
+                      f"{self.single_gpu_pool[gpu_id].model_size} → {model_size}")
+                del self.single_gpu_pool[gpu_id]
 
-            print("⏳ Waiting for available transcriber...")
-            if self.available_single:
-                worker_id = self.available_single.pop(0)
-                return self.single_gpu_pool[worker_id], worker_id
-
-            worker_id = list(self.single_gpu_pool.keys())[0]
-            return self.single_gpu_pool[worker_id], worker_id
-
-    def release_single_gpu_transcriber(self, worker_id: str):
-        with self.lock:
-            if (
-                worker_id in self.single_gpu_pool
-                and worker_id not in self.available_single
-            ):
-                self.available_single.append(worker_id)
-                print(f"✅ Released single-GPU transcriber: {worker_id}")
-
-    def get_parallel_transcriber(
-        self,
-        model_size: str,
-        min_silence_duration_s: float,
-    ) -> Tuple[ParallelWhisperTranscriber, str]:
-        min_silence_duration_ms = int(min_silence_duration_s * 1000)
-
-        with self.lock:
-            for worker_id in self.available_parallel[:]:
-                trans = self.parallel_gpu_pool.get(worker_id)
-                if trans and trans.model_size == model_size:
-                    self.available_parallel.remove(worker_id)
-                    print(f"♻️  Reusing parallel transcriber: {worker_id}")
-                    return trans, worker_id
-
-            worker_id = f"parallel_{uuid.uuid4().hex[:8]}"
-
-            gpu_ids_str = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3")
-            gpu_ids = [int(x.strip()) for x in gpu_ids_str.split(",") if x.strip()]
-
-            trans = ParallelWhisperTranscriber(
+            print(f"✨ Loading {model_size} on GPU {gpu_id}")
+            trans = WhisperTranscriber(
                 model_size=model_size,
+                device=device,
+                device_index=gpu_id,
                 compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "float16"),
-                gpu_ids=gpu_ids,
+                use_vad=use_vad,
                 min_silence_duration_ms=min_silence_duration_ms,
             )
+            self.single_gpu_pool[gpu_id] = trans
+            self.gpu_active[gpu_id] += 1
+            print(f"✅ GPU {gpu_id} ready (active={self.gpu_active[gpu_id]})")
+            return trans, gpu_id
 
-            self.parallel_gpu_pool[worker_id] = trans
-            print(f"✨ Created new parallel transcriber: {worker_id}")
-            return trans, worker_id
-
-    def release_parallel_transcriber(self, worker_id: str):
+    def release_single_gpu_transcriber(self, gpu_id):
         with self.lock:
-            if (
-                worker_id in self.parallel_gpu_pool
-                and worker_id not in self.available_parallel
-            ):
-                self.available_parallel.append(worker_id)
-                print(f"✅ Released parallel transcriber: {worker_id}")
+            if gpu_id in self.gpu_active and self.gpu_active[gpu_id] > 0:
+                self.gpu_active[gpu_id] -= 1
+                print(f"✅ Released GPU {gpu_id} "
+                      f"(active={self.gpu_active[gpu_id]})")
 
 
-# Global transcriber pool
-transcriber_pool = TranscriberPool(max_workers=2)
+
+# Global transcriber pool — GPU slots auto-detected from CUDA_VISIBLE_DEVICES
+transcriber_pool = TranscriberPool()
 
 
 def cleanup_old_files(max_age_hours: int = 24):
@@ -276,7 +283,6 @@ def process_audio(
     merge_subtitles: bool,
     convert_to_traditional: bool,
     max_chars: int,
-    use_multi_gpu: bool,
     translate_hakka: bool = False,
     llm_system_prompt: str = "",
     use_lexicon: bool = False,
@@ -300,7 +306,6 @@ def process_audio(
     video_title = "output"
     audio_duration = 0.0
     worker_id = None
-    is_parallel = False
 
     # Shorthand for progress-only yields (translation panel stays hidden)
     def prog(pct, msg):
@@ -378,14 +383,11 @@ def process_audio(
             audio_duration = 0.0
 
         # ── Transcription ──────────────────────────────────────────────
-        use_parallel = use_multi_gpu and audio_duration >= 300
-        num_gpus_used = 1
-
-        # ── VAD (single-GPU only; parallel transcriber handles its own VAD) ──
+        # ── VAD ──────────────────────────────────────────────────────
         # Running VAD here — after enhancement — guarantees speech detection
         # always operates on the cleaned-up audio.
         vad_chunks = None
-        if use_vad and not use_parallel:
+        if use_vad:
             yield prog(32, "Detecting speech segments with VAD...")
             _vad = SileroVAD(min_silence_duration_ms=int(min_silence_duration_s * 1000))
             _audio, _sr = sf.read(audio_path, dtype="float32")
@@ -402,40 +404,21 @@ def process_audio(
                 return
             yield prog(34, f"VAD: {n_chunks} speech segment(s) detected")
 
-        if use_parallel:
-            is_parallel = True
-            yield prog(35, "Loading models on multiple GPUs...")
+        yield prog(35, "Loading Whisper model...")
 
-            para_trans, worker_id = transcriber_pool.get_parallel_transcriber(
-                model_size, min_silence_duration_s
-            )
-            num_gpus_used = para_trans.num_gpus
-            yield prog(40, f"Starting parallel transcription on {num_gpus_used} GPUs...")
-            print(f"🚀 Using parallel transcriber: {worker_id} ({num_gpus_used} GPUs)")
+        trans, worker_id = transcriber_pool.get_single_gpu_transcriber(
+            model_size, use_vad, min_silence_duration_s
+        )
+        yield prog(40, f"Model loaded on GPU {worker_id}. Starting transcription...")
+        print(f"🔧 Using single-GPU transcriber on GPU {worker_id}")
 
-            segments = para_trans.transcribe_parallel(
-                audio_path,
-                language=language if language != "auto" else None,
-                task=task,
-                progress_callback=None,
-            )
-        else:
-            is_parallel = False
-            yield prog(35, "Loading Whisper model on GPU 0...")
-
-            trans, worker_id = transcriber_pool.get_single_gpu_transcriber(
-                model_size, use_vad, min_silence_duration_s
-            )
-            yield prog(40, "Model loaded on GPU 0. Starting transcription...")
-            print(f"🔧 Using single-GPU transcriber: {worker_id}")
-
-            segments = trans.transcribe(
-                audio_path,
-                language=language if language != "auto" else None,
-                task=task,
-                progress_callback=None,
-                vad_chunks=vad_chunks,  # pre-computed from enhanced audio
-            )
+        segments = trans.transcribe(
+            audio_path,
+            language=language if language != "auto" else None,
+            task=task,
+            progress_callback=None,
+            vad_chunks=vad_chunks,  # pre-computed from enhanced audio
+        )
 
         yield prog(85, "Transcription complete")
 
@@ -515,7 +498,7 @@ def process_audio(
 
         # ── Final status ───────────────────────────────────────────────
         processing_time = time.time() - start_time
-        gpu_info = f"{num_gpus_used} GPUs" if use_parallel else "GPU 0 (single)"
+        gpu_info = f"GPU {worker_id} (single)"
         parts = [f"✅ Complete! {len(asr_segments)} segments.\n"]
         parts.append(f"Session: {session_id}")
         parts.append(f"Mode: {gpu_info}")
@@ -546,10 +529,7 @@ def process_audio(
 
     finally:
         if worker_id:
-            if is_parallel:
-                transcriber_pool.release_parallel_transcriber(worker_id)
-            else:
-                transcriber_pool.release_single_gpu_transcriber(worker_id)
+            transcriber_pool.release_single_gpu_transcriber(worker_id)
 
         for f in temp_files:
             if f and os.path.exists(f):
@@ -716,11 +696,6 @@ def create_interface() -> gr.Blocks:
                     label="VAD: Minimum Silence Duration (seconds)",
                 )
 
-                multi_gpu_checkbox = gr.Checkbox(
-                    value=True,
-                    label="Use Multi-GPU Parallel Processing (for audio > 5 min)",
-                )
-
                 max_chars_slider = gr.Slider(
                     minimum=40, maximum=120, value=80, step=10,
                     label="Max Characters Per Line",
@@ -774,7 +749,6 @@ def create_interface() -> gr.Blocks:
                 merge_checkbox,
                 zh_conv_checkbox,
                 max_chars_slider,
-                multi_gpu_checkbox,
                 translate_hakka_checkbox,
                 llm_prompt_textbox,
                 use_lexicon_checkbox,
@@ -972,8 +946,8 @@ def main():
     default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
     if os.environ.get("PRELOAD_MODEL", "false").lower() == "true":
         print(f"🔄 Pre-loading model: {default_model}")
-        trans, worker_id = transcriber_pool.get_single_gpu_transcriber(default_model, True, 0.1)
-        transcriber_pool.release_single_gpu_transcriber(worker_id)
+        trans, gpu_id = transcriber_pool.get_single_gpu_transcriber(default_model, True, 0.1)
+        transcriber_pool.release_single_gpu_transcriber(gpu_id)
         print("✅ Model pre-loaded")
 
     fastapi_app = FastAPI()

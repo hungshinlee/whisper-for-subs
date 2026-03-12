@@ -384,6 +384,7 @@ class WhisperTranscriber:
         self,
         model_size: str = "large-v3",
         device: str = "cuda",
+        device_index: int = 0,
         compute_type: str = "float16",
         use_vad: bool = True,
         vad_threshold: float = 0.5,
@@ -401,10 +402,10 @@ class WhisperTranscriber:
 
         self.gpu_index = None
         if self.device == "cuda" and torch.cuda.is_available():
-            self.gpu_index = torch.cuda.current_device()
+            self.gpu_index = device_index
             print(f"🎯 Single-GPU mode: Using GPU {self.gpu_index}")
 
-        print(f"Loading Whisper model: {model_size} on {self.device}")
+        print(f"Loading Whisper model: {model_size} on {self.device}:{device_index}")
 
         actual_model_path = ensure_model_ready(model_size)
         if actual_model_path != model_size:
@@ -413,6 +414,7 @@ class WhisperTranscriber:
         self.model = WhisperModel(
             actual_model_path,
             device=self.device,
+            device_index=device_index,
             compute_type=self.compute_type,
         )
         print("✅ Model loaded successfully")
