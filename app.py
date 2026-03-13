@@ -296,6 +296,10 @@ def process_audio(
         (status_html, asr_srt_text, asr_srt_file,
          translated_col_update, translated_srt_text, translated_srt_file)
     """
+    # "hakka" is a UI-level selector value — map it to the actual Whisper language code
+    if language == "hakka":
+        language = "zh"
+
     session_id = uuid.uuid4().hex[:12]
     session_dir = os.path.join("/tmp/whisper-sessions", session_id)
     os.makedirs(session_dir, exist_ok=True)
@@ -601,39 +605,50 @@ def create_interface() -> gr.Blocks:
 
                 gr.Markdown("### ⚙️ Settings")
 
-                model_dropdown = gr.Dropdown(
+                # ── Step 1: Language selector ───────────────────────────
+                GENERAL_MODELS_IDS = ["large-v3", "large-v3-turbo"]
+                HAKKA_MODELS_IDS = [
+                    "formospeech/whisper-large-v2-taiwanese-hakka-v1",
+                    "formospeech/whisper-large-v3-taiwanese-hakka",
+                ]
+
+                default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
+                default_is_hakka = any(m in default_model for m in HAKKA_MODELS_IDS)
+
+                # Determine initial language selector value and initial model choices
+                if default_is_hakka:
+                    init_lang_sel = "hakka"
+                    init_model_choices = [
+                        (MODEL_CONFIGS[m]["display_name"], m) for m in HAKKA_MODELS_IDS
+                    ]
+                    init_model_value = default_model if default_model in HAKKA_MODELS_IDS else HAKKA_MODELS_IDS[0]
+                else:
+                    init_lang_sel = "auto"
+                    init_model_choices = [
+                        (MODEL_CONFIGS[m]["display_name"], m) for m in GENERAL_MODELS_IDS
+                    ]
+                    init_model_value = default_model if default_model in GENERAL_MODELS_IDS else "large-v3-turbo"
+
+                language_selector = gr.Radio(
                     choices=[
-                        (MODEL_CONFIGS[model_id]["display_name"], model_id)
-                        for model_id in MODEL_SIZES
+                        ("Auto",     "auto"),
+                        ("Mandarin", "zh"),
+                        ("English",  "en"),
+                        ("Hakka",    "hakka"),
                     ],
-                    value=os.environ.get("WHISPER_MODEL", "large-v3-turbo"),
+                    value=init_lang_sel,
+                    label="Language",
+                    info="先選擇語言，再選擇對應模型",
+                )
+
+                # ── Step 2: Model selector (filtered by language) ───────
+                model_dropdown = gr.Dropdown(
+                    choices=init_model_choices,
+                    value=init_model_value,
                     label="Model",
                 )
 
-                default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
-
-                if any(m in default_model for m in [
-                    "formospeech/whisper-large-v2-taiwanese-hakka-v1",
-                    "formospeech/whisper-large-v3-taiwanese-hakka",
-                ]):
-                    language_interactive = False
-                    language_value = "zh"
-                    language_info = "This model supports Hakka"
-                else:
-                    language_interactive = True
-                    language_value = "auto"
-                    language_info = None
-
-                with gr.Row():
-                    language_radio = gr.Radio(
-                        choices=[(name, code) for code, name in SUPPORTED_LANGUAGES.items()],
-                        value=language_value,
-                        label="Language",
-                        interactive=language_interactive,
-                        info=language_info,
-                    )
-
-                task_interactive = default_model != "large-v3-turbo"
+                task_interactive = init_model_value != "large-v3-turbo"
 
                 with gr.Row():
                     task_radio = gr.Radio(
@@ -742,7 +757,7 @@ def create_interface() -> gr.Blocks:
                 audio_input,
                 youtube_input,
                 model_dropdown,
-                language_radio,
+                language_selector,
                 task_radio,
                 use_vad_checkbox,
                 min_silence_slider,
@@ -765,44 +780,74 @@ def create_interface() -> gr.Blocks:
             ],
         )
 
-        HAKKA_MODELS = [
+        _GENERAL_MODELS_IDS = ["large-v3", "large-v3-turbo"]
+        _HAKKA_MODELS_IDS = [
             "formospeech/whisper-large-v2-taiwanese-hakka-v1",
             "formospeech/whisper-large-v3-taiwanese-hakka",
         ]
 
-        def on_model_change(model_name):
-            is_hakka = any(m in model_name for m in HAKKA_MODELS)
+        def on_language_change(lang):
+            """Update model choices and related controls when language selector changes."""
+            if lang == "hakka":
+                choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in _HAKKA_MODELS_IDS]
+                new_model = _HAKKA_MODELS_IDS[0]
+                is_hakka = True
+            else:
+                choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in _GENERAL_MODELS_IDS]
+                new_model = "large-v3-turbo"
+                is_hakka = False
 
-            language_update = gr.update(
-                value="zh", interactive=False,
-                info="This model only supports Mandarin",
-            ) if is_hakka else gr.update(interactive=True, info=None)
+            task_update = gr.update(
+                value="transcribe", interactive=False,
+                info="Note: large-v3-turbo only supports Transcribe",
+            ) if new_model == "large-v3-turbo" else gr.update(interactive=True, info=None)
+
+            return (
+                gr.update(choices=choices, value=new_model),   # model_dropdown
+                task_update,                                    # task_radio
+                gr.update(visible=is_hakka),                   # llm_col
+                gr.update(value=is_hakka),                     # translate_hakka_checkbox
+                gr.update(visible=is_hakka),                   # llm_prompt_textbox
+                gr.update(visible=False),                      # translated_col
+            )
+
+        language_selector.change(
+            fn=on_language_change,
+            inputs=[language_selector],
+            outputs=[
+                model_dropdown,
+                task_radio,
+                llm_col,
+                translate_hakka_checkbox,
+                llm_prompt_textbox,
+                translated_col,
+            ],
+            queue=False,
+        )
+
+        def on_model_change(model_name):
+            """Update task controls when a specific model is chosen within the filtered list."""
+            is_hakka = any(m in model_name for m in _HAKKA_MODELS_IDS)
 
             task_update = gr.update(
                 value="transcribe", interactive=False,
                 info="Note: large-v3-turbo only supports Transcribe",
             ) if model_name == "large-v3-turbo" else gr.update(interactive=True, info=None)
 
-            # Switching TO a Hakka model: show llm_col and reset the checkbox
-            # to True (預設開啟).
-            # Switching AWAY from a Hakka model: hide llm_col and reset the
-            # checkbox to False so stale state doesn't bleed into other models.
             checkbox_update = gr.update(value=True) if is_hakka else gr.update(value=False)
 
             return (
-                language_update,
                 task_update,
                 gr.update(visible=is_hakka),   # llm_col
                 checkbox_update,               # translate_hakka_checkbox
-                gr.update(visible=is_hakka),   # llm_prompt_textbox: show when Hakka model selected
-                gr.update(visible=False),      # translated_col hide on model switch
+                gr.update(visible=is_hakka),   # llm_prompt_textbox
+                gr.update(visible=False),      # translated_col
             )
 
         model_dropdown.change(
             fn=on_model_change,
             inputs=[model_dropdown],
             outputs=[
-                language_radio,
                 task_radio,
                 llm_col,
                 translate_hakka_checkbox,
@@ -877,7 +922,7 @@ def create_interface() -> gr.Blocks:
         _EXAMPLE_DEFAULTS = dict(
             youtube_url="",
             model_size="formospeech/whisper-large-v2-taiwanese-hakka-v1",
-            language="zh",
+            language="hakka",
             task="transcribe",
         )
 
@@ -904,7 +949,7 @@ def create_interface() -> gr.Blocks:
                 audio_input,
                 youtube_input,
                 model_dropdown,
-                language_radio,
+                language_selector,
                 task_radio,
                 ground_truth_textbox,
             ],
