@@ -613,6 +613,7 @@ def create_interface() -> gr.Blocks:
 
     _HEAD_HTML = """
 <meta property="og:title" content="FormoSST：臺灣語音辨識暨翻譯系統" />
+<meta property="twitter:title" content="FormoSST：臺灣語音辨識暨翻譯系統" />
 <meta property="og:description" content="支援國語、客語、台語、英語的語音辨識服務，可將音檔或 YouTube 影片轉換為 SRT 字幕檔。" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://formosst.iis.sinica.edu.tw/" />
