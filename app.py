@@ -562,11 +562,11 @@ def create_interface() -> gr.Blocks:
             ## 臺灣語音辨識暨翻譯系統
 
             ### Model Developers
-            - **[李鴻昕 Hung-Shin Lee](https://www.linkedin.com/in/hungshinlee)**（聯和科創股份有限公司）
-            - **[陳力瑫 Li-Wei Chen](mailto:wayne900619@gmail.com)**（國立清華大學資訊工程學研究所）
+            - **[李鴻欣 Hung-Shin Lee](https://www.linkedin.com/in/hungshinlee)**（聯和科創股份有限公司）
+            - **[陳力瑋 Li-Wei Chen](mailto:wayne900619@gmail.com)**（國立清華大學資訊工程學研究所）
             ### Machine Providers (RTX 2080 Ti * 4)
             - **[王新民 Hsin-Min Wang](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html)**（中央研究院資訊科學研究所）
-            - **[廖沛俳 Pei-Jun Liao](mailto:newsboy3423@gmail.com)**（中央研究院資訊科學研究所）
+            - **[廖沛俊 Pei-Jun Liao](mailto:newsboy3423@gmail.com)**（中央研究院資訊科學研究所）
             """
         )
 
@@ -613,18 +613,18 @@ def create_interface() -> gr.Blocks:
                 default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
                 default_is_hakka = any(m in default_model for m in HAKKA_MODELS_IDS)
 
-                # Determine initial language selector value and initial model choices
+                # Determine initial language selector value and initial model value.
+                # NOTE: choices always contain ALL models so that gr.Examples can set
+                # any model value without the dropdown rejecting it as out-of-range.
+                ALL_MODEL_CHOICES = (
+                    [(MODEL_CONFIGS[m]["display_name"], m) for m in GENERAL_MODELS_IDS]
+                    + [(MODEL_CONFIGS[m]["display_name"], m) for m in HAKKA_MODELS_IDS]
+                )
                 if default_is_hakka:
                     init_lang_sel = "hakka"
-                    init_model_choices = [
-                        (MODEL_CONFIGS[m]["display_name"], m) for m in HAKKA_MODELS_IDS
-                    ]
                     init_model_value = default_model if default_model in HAKKA_MODELS_IDS else HAKKA_MODELS_IDS[0]
                 else:
                     init_lang_sel = "auto"
-                    init_model_choices = [
-                        (MODEL_CONFIGS[m]["display_name"], m) for m in GENERAL_MODELS_IDS
-                    ]
                     init_model_value = default_model if default_model in GENERAL_MODELS_IDS else "large-v3-turbo"
 
                 language_selector = gr.Radio(
@@ -636,12 +636,14 @@ def create_interface() -> gr.Blocks:
                     ],
                     value=init_lang_sel,
                     label="Language",
-                    info="先選擇語言，再選擇對應模型",
+                    # info="",
                 )
 
-                # ── Step 2: Model selector (filtered by language) ───────
+                # ── Step 2: Model selector (always contains all models) ──
+                # Keeping all choices at all times ensures gr.Examples can set
+                # any model value correctly regardless of current language.
                 model_dropdown = gr.Dropdown(
-                    choices=init_model_choices,
+                    choices=ALL_MODEL_CHOICES,
                     value=init_model_value,
                     label="Model",
                 )
@@ -682,6 +684,16 @@ def create_interface() -> gr.Blocks:
                     merge_checkbox     = gr.Checkbox(value=True,  label="Merge Short Subtitles")
                     zh_conv_checkbox   = gr.Checkbox(value=False, label="Convert to zh-TW")
 
+                min_silence_slider = gr.Slider(
+                    minimum=0.01, maximum=2.0, value=0.2, step=0.01,
+                    label="VAD: Minimum Silence Duration (seconds)",
+                )
+
+                max_chars_slider = gr.Slider(
+                    minimum=40, maximum=120, value=80, step=10,
+                    label="Max Characters Per Line",
+                )
+
                 # LLM controls — wrapped in Column to avoid Gradio hidden-element event bugs
                 with gr.Column(visible=False) as llm_col:
                     translate_hakka_checkbox = gr.Checkbox(
@@ -693,26 +705,16 @@ def create_interface() -> gr.Blocks:
                     use_lexicon_checkbox = gr.Checkbox(
                         value=True,
                         label="📚 Use Lexicon Augmentation",
-                        info="將詞彙表的參考譯文注入 Prompt，幫助 LLM 正確翻譯客語詞彙",
+                        # info="將詞彙表的參考譯文注入 Prompt，幫助 LLM 正確翻譯客語詞彙",
                         interactive=LLM_ENABLED,
                     )
                     llm_prompt_textbox = gr.Textbox(
                         value=DEFAULT_SYSTEM_PROMPT,
                         label="🤖 LLM System Prompt",
-                        info="可自訂翻譯指令，留空則使用預設 Prompt",
+                        # info="可自訂翻譯指令，留空則使用預設 Prompt",
                         lines=6,
                         visible=True,
                     )
-
-                min_silence_slider = gr.Slider(
-                    minimum=0.01, maximum=2.0, value=0.2, step=0.01,
-                    label="VAD: Minimum Silence Duration (seconds)",
-                )
-
-                max_chars_slider = gr.Slider(
-                    minimum=40, maximum=120, value=80, step=10,
-                    label="Max Characters Per Line",
-                )
 
                 process_btn = gr.Button("🚀 Start", variant="primary", size="lg")
 
@@ -736,7 +738,7 @@ def create_interface() -> gr.Blocks:
 
                 # ── Translation output (visible only after LLM translation) ──
                 with gr.Column(visible=False) as translated_col:
-                    gr.Markdown("#### 🈯 Translation Result (繁體中文)")
+                    gr.Markdown("#### 🈯 Translation Result (Mandarin)")
                     translated_srt_output = gr.Textbox(
                         label="SRT Subtitle Content (Translated)",
                         lines=12,
@@ -801,7 +803,7 @@ def create_interface() -> gr.Blocks:
             ) if new_model == "large-v3-turbo" else gr.update(interactive=True, info=None)
 
             return (
-                gr.update(choices=choices, value=new_model),   # model_dropdown
+                gr.update(value=new_model),   # model_dropdown — only change value, not choices
                 task_update,                                    # task_radio
                 gr.update(visible=is_hakka),                   # llm_col
                 gr.update(value=is_hakka),                     # translate_hakka_checkbox
@@ -912,7 +914,7 @@ def create_interface() -> gr.Blocks:
         # Ground truth textbox — read-only, populated when an example is clicked
         ground_truth_textbox = gr.Textbox(
             label="Ground Truth",
-            info="此範例音檔的標準參考文字",
+            # info="此範例音檔的標準參考文字",
             interactive=False,
             lines=3,
         )
@@ -943,7 +945,7 @@ def create_interface() -> gr.Blocks:
                 task_radio,
                 ground_truth_textbox,
             ],
-            label="客語辨識 + LLM 翻譯範例",
+            # label="客語辨識 + LLM 翻譯範例",
         )
 
     return app
