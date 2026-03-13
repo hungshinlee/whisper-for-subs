@@ -649,14 +649,6 @@ def create_interface() -> gr.Blocks:
                 default_is_hakka = any(m in default_model for m in HAKKA_MODELS_IDS)
                 default_is_taigi = any(m in default_model for m in TAIGI_MODELS_IDS)
 
-                # Determine initial language selector value and initial model value.
-                # NOTE: choices always contain ALL models so that gr.Examples can set
-                # any model value without the dropdown rejecting it as out-of-range.
-                ALL_MODEL_CHOICES = (
-                    [(MODEL_CONFIGS[m]["display_name"], m) for m in GENERAL_MODELS_IDS]
-                    + [(MODEL_CONFIGS[m]["display_name"], m) for m in HAKKA_MODELS_IDS]
-                    + [(MODEL_CONFIGS[m]["display_name"], m) for m in TAIGI_MODELS_IDS]
-                )
                 if default_is_taigi:
                     init_lang_sel = "taigi"
                     init_model_value = default_model if default_model in TAIGI_MODELS_IDS else TAIGI_MODELS_IDS[0]
@@ -677,14 +669,20 @@ def create_interface() -> gr.Blocks:
                     ],
                     value=init_lang_sel,
                     label="Language",
-                    # info="",
                 )
 
-                # ── Step 2: Model selector (always contains all models) ──
-                # Keeping all choices at all times ensures gr.Examples can set
-                # any model value correctly regardless of current language.
-                model_dropdown = gr.Dropdown(
-                    choices=ALL_MODEL_CHOICES,
+                # ── Step 2: Model selector ──────────────────────────────
+                # Initial choices are filtered by the initial language.
+                # on_language_change updates both choices and value together.
+                if init_lang_sel == "taigi":
+                    init_model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in TAIGI_MODELS_IDS]
+                elif init_lang_sel == "hakka":
+                    init_model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in HAKKA_MODELS_IDS]
+                else:
+                    init_model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in GENERAL_MODELS_IDS]
+
+                model_dropdown = gr.Radio(
+                    choices=init_model_choices,
                     value=init_model_value,
                     label="Model",
                 )
@@ -757,13 +755,11 @@ def create_interface() -> gr.Blocks:
                     use_lexicon_checkbox = gr.Checkbox(
                         value=True,
                         label="📚 Use Lexicon Augmentation",
-                        # info="將詞彙表的參考譯文注入 Prompt，幫助 LLM 正確翻譯客語詞彙",
                         interactive=LLM_ENABLED,
                     )
                     llm_prompt_textbox = gr.Textbox(
                         value=DEFAULT_SYSTEM_PROMPT,
                         label="🤖 LLM System Prompt",
-                        # info="可自訂翻譯指令，留空則使用預設 Prompt",
                         lines=6,
                         visible=True,
                     )
@@ -982,38 +978,29 @@ def create_interface() -> gr.Blocks:
         # Ground truth textbox — read-only, populated when an example is clicked
         ground_truth_textbox = gr.Textbox(
             label="Ground Truth",
-            # info="此範例音檔的標準參考文字",
             interactive=False,
             lines=3,
         )
-
-        _EXAMPLE_MODEL = "formospeech/whisper-large-v2-taiwanese-hakka-v1"
 
         gr.Examples(
             examples=[
                 [
                     "samples/734a04794010481cb3eed411b6e005cc.wav",
                     "hakka",
-                    _EXAMPLE_MODEL,
-                    "transcribe",
                     "下二隻月就愛過年咔，魚仑相關個產品就開始起價，因為呢愛分民眾在防疫期間乞買得著萋萋個魚貨，苗栗魚市場就特別推出咋限量個過年禮盒，用網路，注文還過送貨到屋個服務，還過較便宜個價數，分苗栗鄉親在屋下裡肥，乞買得著萋萋又有保障個魚貨。",
                 ],
                 [
                     "samples/874062dc1657497b9ac996971c9ce4bb.wav",
                     "hakka",
-                    _EXAMPLE_MODEL,
-                    "transcribe",
                     "這隻世界項有當多人高不將愛摇自家個夢想放忌去，你既然做得追求你個夢想，你就愛認真薤猛分作匹試著當見笑啊。",
                 ],
             ],
             inputs=[
                 audio_input,
                 language_selector,
-                model_dropdown,
-                task_radio,
                 ground_truth_textbox,
             ],
-            # label="客語辨識 + LLM 翻譯範例",
+            # label="客語辨識範例",
         )
 
     return app
