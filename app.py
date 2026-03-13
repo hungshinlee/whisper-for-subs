@@ -554,6 +554,7 @@ def create_interface() -> gr.Blocks:
         title="FormoSST: Speech-to-Text System for Taiwanese Languages",
         theme=gr.themes.Soft(),
         css=CUSTOM_CSS,
+        analytics_enabled=False,
     ) as app:
         gr.Markdown(
             """
@@ -1010,7 +1011,7 @@ def main():
         return {"error": "File not found"}
 
     gradio_app = create_interface()
-    gradio_app.queue(max_size=10, default_concurrency_limit=2)
+    gradio_app.queue(max_size=10, default_concurrency_limit=2, api_open=False)
 
     # Mount with optional password and API disabled
     _password = os.environ.get("GRADIO_PASSWORD", "").strip()
