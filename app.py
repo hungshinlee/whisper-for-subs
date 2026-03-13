@@ -590,6 +590,8 @@ def create_interface() -> gr.Blocks:
             ### Machine Providers (RTX 2080 Ti * 4)
             - **[王新民 Hsin-Min Wang](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html)**（中央研究院資訊科學研究所）
             - **[廖沛俊 Pei-Jun Liao](mailto:newsboy3423@gmail.com)**（中央研究院資訊科學研究所）
+            ### Supported Languages
+            - **Mandarin**, **Hakka**, **Taigi**, and **English**
             """
         )
 
