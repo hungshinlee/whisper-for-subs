@@ -296,9 +296,16 @@ def process_audio(
         (status_html, asr_srt_text, asr_srt_file,
          translated_col_update, translated_srt_text, translated_srt_file)
     """
-    # "hakka" is a UI-level selector value — map it to the actual Whisper language code
-    if language == "hakka":
+    # UI-level language/task values — map to actual Whisper codes
+    if language == "taigi":
+        # Taigi model is fine-tuned to output Mandarin; always use task="transcribe"
         language = "zh"
+        task = "transcribe"
+    elif language == "hakka":
+        language = "zh"
+    # Safety fallback: translate_mandarin is a UI-only value
+    if task == "translate_mandarin":
+        task = "transcribe"
 
     session_id = uuid.uuid4().hex[:12]
     session_dir = os.path.join("/tmp/whisper-sessions", session_id)
@@ -502,13 +509,13 @@ def process_audio(
 
         # ── Final status ────────────────────────────────────────────────
         processing_time = time.time() - start_time
-        speed_ratio = (audio_duration / processing_time) if (audio_duration > 0 and processing_time > 0) else None
+        rtf = (processing_time / audio_duration) if (audio_duration > 0 and processing_time > 0) else None
 
         metrics = [
-            ("📝", "Segments",    str(len(asr_segments))),
-            ("⏱️", "Audio",       f"{audio_duration:.1f}s" if audio_duration > 0 else None),
-            ("⚡", "Processing",  f"{processing_time:.1f}s"),
-            ("🚀", "Speed",       f"{speed_ratio:.2f}x realtime" if speed_ratio else None),
+            ("📝", "Segments",   str(len(asr_segments))),
+            ("⏱️", "Audio",      f"{audio_duration:.1f}s" if audio_duration > 0 else None),
+            ("⚡", "Processing", f"{processing_time:.1f}s"),
+            ("🚀", "RTF",        f"{rtf:.4f}" if rtf is not None else None),
         ]
 
         badge_style = (
@@ -634,9 +641,13 @@ def create_interface() -> gr.Blocks:
                     "formospeech/whisper-large-v2-taiwanese-hakka-v1",
                     "formospeech/whisper-large-v3-taiwanese-hakka",
                 ]
+                TAIGI_MODELS_IDS = [
+                    "PRIVATE_TAIGI_MODEL",
+                ]
 
                 default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
                 default_is_hakka = any(m in default_model for m in HAKKA_MODELS_IDS)
+                default_is_taigi = any(m in default_model for m in TAIGI_MODELS_IDS)
 
                 # Determine initial language selector value and initial model value.
                 # NOTE: choices always contain ALL models so that gr.Examples can set
@@ -644,8 +655,12 @@ def create_interface() -> gr.Blocks:
                 ALL_MODEL_CHOICES = (
                     [(MODEL_CONFIGS[m]["display_name"], m) for m in GENERAL_MODELS_IDS]
                     + [(MODEL_CONFIGS[m]["display_name"], m) for m in HAKKA_MODELS_IDS]
+                    + [(MODEL_CONFIGS[m]["display_name"], m) for m in TAIGI_MODELS_IDS]
                 )
-                if default_is_hakka:
+                if default_is_taigi:
+                    init_lang_sel = "taigi"
+                    init_model_value = default_model if default_model in TAIGI_MODELS_IDS else TAIGI_MODELS_IDS[0]
+                elif default_is_hakka:
                     init_lang_sel = "hakka"
                     init_model_value = default_model if default_model in HAKKA_MODELS_IDS else HAKKA_MODELS_IDS[0]
                 else:
@@ -658,6 +673,7 @@ def create_interface() -> gr.Blocks:
                         ("Mandarin", "zh"),
                         ("English",  "en"),
                         ("Hakka",    "hakka"),
+                        ("Taigi",    "taigi"),
                     ],
                     value=init_lang_sel,
                     label="Language",
@@ -673,19 +689,26 @@ def create_interface() -> gr.Blocks:
                     label="Model",
                 )
 
-                task_interactive = init_model_value != "large-v3-turbo"
+                init_is_taigi = init_model_value in TAIGI_MODELS_IDS
+                task_interactive = init_model_value != "large-v3-turbo" and not init_is_taigi
+                init_task_value = "translate_mandarin" if init_is_taigi else "transcribe"
+                init_task_info = (
+                    "Taigi model always outputs Mandarin" if init_is_taigi
+                    else ("Note: large-v3-turbo only supports Transcribe" if not task_interactive
+                    else None)
+                )
 
                 with gr.Row():
                     task_radio = gr.Radio(
                         choices=[
                             ("Transcribe", "transcribe"),
                             ("Translate to English", "translate"),
+                            ("Translate to Mandarin", "translate_mandarin"),
                         ],
-                        value="transcribe",
+                        value=init_task_value,
                         label="Task",
                         interactive=task_interactive,
-                        info="Note: large-v3-turbo only supports Transcribe"
-                        if not task_interactive else None,
+                        info=init_task_info,
                     )
 
                 # Speech Enhancement controls
@@ -810,30 +833,48 @@ def create_interface() -> gr.Blocks:
             "formospeech/whisper-large-v2-taiwanese-hakka-v1",
             "formospeech/whisper-large-v3-taiwanese-hakka",
         ]
+        _TAIGI_MODELS_IDS = [
+            "PRIVATE_TAIGI_MODEL",
+        ]
 
         def on_language_change(lang):
-            """Update model choices and related controls when language selector changes."""
+            """Update model and task controls when language selector changes."""
+            if lang == "taigi":
+                new_model = _TAIGI_MODELS_IDS[0]
+                task_update = gr.update(
+                    value="translate_mandarin", interactive=False,
+                    info="Taigi model always outputs Mandarin",
+                )
+                return (
+                    gr.update(value=new_model),
+                    task_update,
+                    gr.update(visible=False),   # llm_col
+                    gr.update(value=False),     # translate_hakka_checkbox
+                    gr.update(visible=False),   # llm_prompt_textbox
+                    gr.update(visible=False),   # translated_col
+                )
+
             if lang == "hakka":
-                choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in _HAKKA_MODELS_IDS]
                 new_model = _HAKKA_MODELS_IDS[0]
                 is_hakka = True
             else:
-                choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in _GENERAL_MODELS_IDS]
                 new_model = "large-v3-turbo"
                 is_hakka = False
 
             task_update = gr.update(
                 value="transcribe", interactive=False,
                 info="Note: large-v3-turbo only supports Transcribe",
-            ) if new_model == "large-v3-turbo" else gr.update(interactive=True, info=None)
+            ) if new_model == "large-v3-turbo" else gr.update(
+                value="transcribe", interactive=True, info=None,
+            )
 
             return (
                 gr.update(value=new_model),   # model_dropdown — only change value, not choices
-                task_update,                                    # task_radio
-                gr.update(visible=is_hakka),                   # llm_col
-                gr.update(value=is_hakka),                     # translate_hakka_checkbox
-                gr.update(visible=is_hakka),                   # llm_prompt_textbox
-                gr.update(visible=False),                      # translated_col
+                task_update,
+                gr.update(visible=is_hakka),   # llm_col
+                gr.update(value=is_hakka),     # translate_hakka_checkbox
+                gr.update(visible=is_hakka),   # llm_prompt_textbox
+                gr.update(visible=False),      # translated_col
             )
 
         language_selector.change(
@@ -851,22 +892,31 @@ def create_interface() -> gr.Blocks:
         )
 
         def on_model_change(model_name):
-            """Update task controls when a specific model is chosen within the filtered list."""
-            is_hakka = any(m in model_name for m in _HAKKA_MODELS_IDS)
+            """Update task controls when a specific model is chosen."""
+            is_hakka = model_name in _HAKKA_MODELS_IDS
+            is_taigi = model_name in _TAIGI_MODELS_IDS
 
-            task_update = gr.update(
-                value="transcribe", interactive=False,
-                info="Note: large-v3-turbo only supports Transcribe",
-            ) if model_name == "large-v3-turbo" else gr.update(interactive=True, info=None)
-
-            checkbox_update = gr.update(value=True) if is_hakka else gr.update(value=False)
+            if is_taigi:
+                task_update = gr.update(
+                    value="translate_mandarin", interactive=False,
+                    info="Taigi model always outputs Mandarin",
+                )
+            elif model_name == "large-v3-turbo":
+                task_update = gr.update(
+                    value="transcribe", interactive=False,
+                    info="Note: large-v3-turbo only supports Transcribe",
+                )
+            else:
+                task_update = gr.update(
+                    value="transcribe", interactive=True, info=None,
+                )
 
             return (
                 task_update,
-                gr.update(visible=is_hakka),   # llm_col
-                checkbox_update,               # translate_hakka_checkbox
-                gr.update(visible=is_hakka),   # llm_prompt_textbox
-                gr.update(visible=False),      # translated_col
+                gr.update(visible=is_hakka),           # llm_col
+                gr.update(value=is_hakka),             # translate_hakka_checkbox
+                gr.update(visible=is_hakka),           # llm_prompt_textbox
+                gr.update(visible=False),              # translated_col
             )
 
         model_dropdown.change(

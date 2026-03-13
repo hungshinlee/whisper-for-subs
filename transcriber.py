@@ -66,6 +66,7 @@ def ensure_model_ready(model_name: str) -> str:
     Returns:
         Path to the usable model (CT2 format)
     """
+    # Models that need conversion from HuggingFace transformers → CTranslate2
     CUSTOM_MODELS = {
         "formospeech/whisper-large-v2-taiwanese-hakka-v1": (
             "whisper-large-v2-taiwanese-hakka-v1-ct2", 80,
@@ -74,6 +75,26 @@ def ensure_model_ready(model_name: str) -> str:
             "whisper-large-v3-taiwanese-hakka-ct2", 128,
         ),
     }
+
+    # Models already in CT2 format on HuggingFace — no conversion needed,
+    # but we still patch n_mels in the cached snapshot after download.
+    NATIVE_CT2_MODELS = {
+        "PRIVATE_TAIGI_MODEL": 80,
+    }
+
+    if model_name in NATIVE_CT2_MODELS:
+        n_mels = NATIVE_CT2_MODELS[model_name]
+        import glob
+        hf_cache = os.environ.get("HF_HOME", "/root/.cache/huggingface")
+        owner, repo = model_name.split("/", 1)
+        pattern = os.path.join(
+            hf_cache, "hub",
+            f"models--{owner}--{repo}",
+            "snapshots", "*",
+        )
+        for snapshot_dir in glob.glob(pattern):
+            _patch_model_config(snapshot_dir, n_mels=n_mels)
+        return model_name  # load directly from HF (already CT2)
 
     if model_name not in CUSTOM_MODELS:
         is_v3 = "v3" in model_name.lower()
@@ -151,6 +172,10 @@ MODEL_CONFIGS = {
     "formospeech/whisper-large-v3-taiwanese-hakka": {
         "label": "Hakka",
         "display_name": "[Hakka] formospeech/whisper-large-v3-taiwanese-hakka",
+    },
+    "PRIVATE_TAIGI_MODEL": {
+        "label": "Taigi",
+        "display_name": "[Taigi] whisper-large-v2-taigi-v1",
     },
 }
 
