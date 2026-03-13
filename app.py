@@ -502,19 +502,42 @@ def process_audio(
 
         # ── Final status ────────────────────────────────────────────────
         processing_time = time.time() - start_time
-        parts = [f"✅ 轉識完成！共 {len(asr_segments)} 段字幕。"]
-        if audio_duration > 0:
-            parts.append(f"音訊長度：{audio_duration:.1f} 秒")
-        parts.append(f"處理時間：{processing_time:.1f} 秒")
-        if audio_duration > 0 and processing_time > 0:
-            parts.append(f"處理倉數：{audio_duration / processing_time:.2f}x")
+        speed_ratio = (audio_duration / processing_time) if (audio_duration > 0 and processing_time > 0) else None
+
+        metrics = [
+            ("📝", "Segments",    str(len(asr_segments))),
+            ("⏱️", "Audio",       f"{audio_duration:.1f}s" if audio_duration > 0 else None),
+            ("⚡", "Processing",  f"{processing_time:.1f}s"),
+            ("🚀", "Speed",       f"{speed_ratio:.2f}x realtime" if speed_ratio else None),
+        ]
+
+        badge_style = (
+            "display:inline-flex;align-items:center;gap:6px;"
+            "background:#f0f7ff;border:1px solid #c7dff7;border-radius:8px;"
+            "padding:6px 12px;margin:4px;font-size:14px;"
+        )
+        label_style = "color:#555;font-weight:400;"
+        value_style = "color:#1565c0;font-weight:600;"
+
+        badges_html = "".join(
+            f'<span style="{badge_style}">'
+            f'{icon} <span style="{label_style}">{label}:</span>'
+            f'<span style="{value_style}">{value}</span>'
+            f'</span>'
+            for icon, label, value in metrics if value is not None
+        )
+        parts = [
+            '<div style="margin-bottom:6px;font-weight:600;color:#2e7d32;font-size:15px">'
+            '✅ Transcription complete</div>',
+            f'<div style="display:flex;flex-wrap:wrap;gap:2px">{badges_html}</div>',
+        ]
 
         print(f"\n{'=' * 60}")
         print(f"✅ Session completed: {session_id}  ({processing_time:.1f}s)")
         print(f"{'=' * 60}\n")
 
         yield (
-            " | ".join(parts),
+            "".join(parts),
             asr_srt_content,
             asr_srt_path,
             translated_col_update,
@@ -738,7 +761,7 @@ def create_interface() -> gr.Blocks:
 
                 # ── Translation output (visible only after LLM translation) ──
                 with gr.Column(visible=False) as translated_col:
-                    gr.Markdown("#### 🈯 Translation Result (Mandarin)")
+                    gr.Markdown("#### 🌐 Translation Result (Mandarin)")
                     translated_srt_output = gr.Textbox(
                         label="SRT Subtitle Content (Translated)",
                         lines=12,
