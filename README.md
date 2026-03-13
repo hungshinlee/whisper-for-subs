@@ -133,18 +133,6 @@ docker compose logs -f
 | `HAKKA_LEXICON_PATH` | `lexicon/hakka_to_mandarin.csv` | 客語詞彙表路徑 |
 | `WHISPER_NO_SPEECH_THRESHOLD` | `0.8` | 幻覺過濾的無語音機率門檻 |
 
-### 可用模型
-
-| 模型 | 語言支援 | Task | VRAM | 速度 | 用途 |
-|------|---------|------|------|------|------|
-| whisper-large-v3-turbo | Auto / Mandarin / English | Transcribe | ~6 GB | ⚡ 快 | **推薦，日常使用** |
-| whisper-large-v3 | Auto / Mandarin / English | Transcribe + Translate | ~10 GB | 普通 | 高品質需求 |
-| FormosaSpeech 客語 v2 | Mandarin（客語輸入） | Transcribe | ~10 GB | 普通 | 台灣客語 |
-| FormosaSpeech 客語 v3 | Mandarin（客語輸入） | Transcribe | ~10 GB | 普通 | 台灣客語（v3） |
-| FormoAI 台語模型 | Mandarin 輸出（台語輸入） | Transcribe | ~10 GB | 普通 | 台灣台語 |
-
-> **注意**：whisper-large-v3-turbo 與客語／台語模型只支援 Transcribe；whisper-large-v3 額外支援 Translate to English。
-
 ---
 
 ## 🖥️ 系統需求
