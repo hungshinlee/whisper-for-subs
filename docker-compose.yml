@@ -29,7 +29,8 @@ services:
       - WHISPER_MODEL=large-v3-turbo
       - WHISPER_DEVICE=cuda
       - WHISPER_COMPUTE_TYPE=float16
-      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
+      - HF_TOKEN=${HUGGING_FACE_HUB_TOKEN}
+      - HUGGINGFACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
       # LLM settings
       - ENABLE_LLM=${ENABLE_LLM:-false}
       - OLLAMA_HOST=http://ollama:11434
