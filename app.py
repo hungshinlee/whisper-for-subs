@@ -502,15 +502,12 @@ def process_audio(
 
         # ── Final status ───────────────────────────────────────────────
         processing_time = time.time() - start_time
-        gpu_info = f"GPU {worker_id} (single)"
-        parts = [f"✅ Complete! {len(asr_segments)} segments.\n"]
-        parts.append(f"Session: {session_id}")
-        parts.append(f"Mode: {gpu_info}")
+        parts = [f"✅ 轉識完成！共 {len(asr_segments)} 段字幕。"]
         if audio_duration > 0:
-            parts.append(f"Audio: {audio_duration:.1f}s")
-        parts.append(f"Time: {processing_time:.1f}s")
+            parts.append(f"音訊長度：{audio_duration:.1f} 秒")
+        parts.append(f"處理時間：{processing_time:.1f} 秒")
         if audio_duration > 0 and processing_time > 0:
-            parts.append(f"Speed: {audio_duration / processing_time:.2f}x realtime")
+            parts.append(f"處理倉數：{audio_duration / processing_time:.2f}x")
 
         print(f"\n{'=' * 60}")
         print(f"✅ Session completed: {session_id}  ({processing_time:.1f}s)")
@@ -529,7 +526,7 @@ def process_audio(
         import traceback
         traceback.print_exc()
         print(f"\n❌ Session failed: {session_id}\nError: {str(e)}\n")
-        yield f"❌ Error: {str(e)}", "", None, *_NO_TRANSLATION
+        yield "❌ 處理失敗，請稍後再試。", "", None, *_NO_TRANSLATION
 
     finally:
         if worker_id:
@@ -1014,7 +1011,21 @@ def main():
 
     gradio_app = create_interface()
     gradio_app.queue(max_size=10, default_concurrency_limit=2)
-    fastapi_app = gr.mount_gradio_app(fastapi_app, gradio_app, path="/")
+
+    # Mount with optional password and API disabled
+    _password = os.environ.get("GRADIO_PASSWORD", "").strip()
+    mount_kwargs = dict(
+        app=fastapi_app,
+        blocks=gradio_app,
+        path="/",
+    )
+    if _password:
+        mount_kwargs["auth"] = ("admin", _password)
+        mount_kwargs["auth_message"] = "請輸入密碼以使用本系統"
+        print(f"🔒 Password protection enabled")
+    else:
+        print("⚠️  GRADIO_PASSWORD not set — running without authentication")
+    fastapi_app = gr.mount_gradio_app(**mount_kwargs)
 
     import uvicorn
     uvicorn.run(
