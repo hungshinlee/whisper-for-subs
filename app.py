@@ -611,20 +611,10 @@ def process_audio(
 
 def create_interface() -> gr.Blocks:
 
-    _HEAD_HTML = """
-<meta property="og:title" content="FormoSST：臺灣語音辨識暨翻譯系統" />
-<meta property="twitter:title" content="FormoSST：臺灣語音辨識暨翻譯系統" />
-<meta property="og:description" content="支援國語、客語、台語、英語的語音辨識服務，可將音檔或 YouTube 影片轉換為 SRT 字幕檔。" />
-<meta property="og:type" content="website" />
-<meta property="og:url" content="https://formosst.iis.sinica.edu.tw/" />
-<meta name="description" content="支援國語、客語、台語、英語的語音辨識服務，可將音檔或 YouTube 影片轉換為 SRT 字幕檔。" />
-"""
-
     with gr.Blocks(
-        title="FormoSST：臺灣語音辨識暨翻譯系統",
+        title="FormoSST: Speech-to-Text System for Taiwanese Languages",
         theme=gr.themes.Soft(),
         css=CUSTOM_CSS,
-        head=_HEAD_HTML,
         analytics_enabled=False,
     ) as app:
         gr.Markdown(
@@ -1100,48 +1090,6 @@ def main():
         print("✅ Model pre-loaded")
 
     fastapi_app = FastAPI()
-
-    # ── OG tag override middleware ───────────────────────────────────────
-    # Gradio hard-codes og:title="Gradio" and og:description="Click to try
-    # out the app!" in its HTML.  Line / Facebook crawlers pick the first
-    # occurrence, so we intercept the response and replace those strings
-    # before they reach the client.
-    from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.requests import Request as StarletteRequest
-
-    class OGTagMiddleware(BaseHTTPMiddleware):
-        _REPLACEMENTS = [
-            (
-                b'<meta property="og:title" content="Gradio"/>',
-                b'<meta property="og:title" content="FormoSST\xef\xbc\x9a\xe8\x87\xba\xe7\x81\xa3\xe8\xaa\x9e\xe9\x9f\xb3\xe8\xbe\xa8\xe8\xad\x98\xe6\x9a\xa8\xe7\xbf\xbb\xe8\xad\xaf\xe7\xb3\xbb\xe7\xb5\xb1"/>',
-            ),
-            (
-                b'<meta property="og:description" content="Click to try out the app!"/>',
-                b'<meta property="og:description" content="\xe6\x94\xaf\xe6\x8f\xb4\xe5\x9c\x8b\xe8\xaa\x9e\xe3\x80\x81\xe5\xae\xa2\xe8\xaa\x9e\xe3\x80\x81\xe5\x8f\xb0\xe8\xaa\x9e\xe3\x80\x81\xe8\x8b\xb1\xe8\xaa\x9e\xe7\x9a\x84\xe8\xaa\x9e\xe9\x9f\xb3\xe8\xbe\xa8\xe8\xad\x98\xe6\x9c\x8d\xe5\x8b\x99\xef\xbc\x8c\xe5\x8f\xaf\xe5\xb0\x87\xe9\x9f\xb3\xe6\xaa\x94\xe6\x88\x96 YouTube \xe5\xbd\xb1\xe7\x89\x87\xe8\xbd\x89\xe6\x8f\x9b\xe7\x82\xba SRT \xe5\xad\x97\xe5\xb9\x95\xe6\xaa\x94\xe3\x80\x82"/>',
-            ),
-        ]
-
-        async def dispatch(self, request: StarletteRequest, call_next):
-            response = await call_next(request)
-            content_type = response.headers.get("content-type", "")
-            if "text/html" not in content_type:
-                return response
-
-            # Buffer the full body
-            body = b"".join([chunk async for chunk in response.body_iterator])
-            for old, new in self._REPLACEMENTS:
-                body = body.replace(old, new)
-
-            from starlette.responses import Response as StarletteResponse
-            return StarletteResponse(
-                content=body,
-                status_code=response.status_code,
-                headers=dict(response.headers),
-                media_type=content_type,
-            )
-
-    fastapi_app.add_middleware(OGTagMiddleware)
-    # ────────────────────────────────────────────────────────────────────
 
     @fastapi_app.get("/terms-and-privacy")
     async def serve_pdf():
