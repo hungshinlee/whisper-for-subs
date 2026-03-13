@@ -698,6 +698,11 @@ def create_interface() -> gr.Blocks:
                     init_task_value       = "transcribe"
                     init_task_interactive = False
                     init_task_info        = "Note: large-v3-turbo only supports Transcribe"
+                elif init_model_value in HAKKA_MODELS_IDS:
+                    init_task_choices     = [("Transcribe", "transcribe")]
+                    init_task_value       = "transcribe"
+                    init_task_interactive = False
+                    init_task_info        = "Hakka model only supports Transcribe"
                 else:
                     init_task_choices     = [("Transcribe", "transcribe"), ("Translate to English", "translate")]
                     init_task_value       = "transcribe"
@@ -852,8 +857,14 @@ def create_interface() -> gr.Blocks:
                     value="transcribe", interactive=False,
                     info="Note: large-v3-turbo only supports Transcribe",
                 )
+            elif model_name in _HAKKA_MODELS_IDS:
+                return gr.update(
+                    choices=[("Transcribe", "transcribe")],
+                    value="transcribe", interactive=False,
+                    info="Hakka model only supports Transcribe",
+                )
             else:
-                # large-v3 and all Hakka models
+                # large-v3
                 return gr.update(
                     choices=[("Transcribe", "transcribe"), ("Translate to English", "translate")],
                     value="transcribe", interactive=True, info=None,

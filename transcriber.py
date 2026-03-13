@@ -159,23 +159,23 @@ SUPPORTED_LANGUAGES = {"auto": "Auto", "zh": "Mandarin", "en": "English"}
 MODEL_CONFIGS = {
     "large-v3": {
         "label": "General",
-        "display_name": "[General] large-v3",
+        "display_name": "whisper-large-v3",
     },
     "large-v3-turbo": {
         "label": "General",
-        "display_name": "[General] large-v3-turbo",
+        "display_name": "whisper-large-v3-turbo",
     },
     "formospeech/whisper-large-v2-taiwanese-hakka-v1": {
         "label": "Hakka",
-        "display_name": "[Hakka] formospeech/whisper-large-v2-taiwanese-hakka-v1",
+        "display_name": "whisper-large-v2-hakka",
     },
     "formospeech/whisper-large-v3-taiwanese-hakka": {
         "label": "Hakka",
-        "display_name": "[Hakka] formospeech/whisper-large-v3-taiwanese-hakka",
+        "display_name": "whisper-large-v3-hakka",
     },
     "PRIVATE_TAIGI_MODEL": {
         "label": "Taigi",
-        "display_name": "[Taigi] whisper-large-v2-taigi-v1",
+        "display_name": "whisper-large-v2-taigi",
     },
 }
 
