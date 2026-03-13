@@ -116,7 +116,7 @@ class TranscriberPool:
         else:
             self.single_gpu_ids = []
 
-        print(f"🎰 TranscriberPool: single-GPU slots on GPU(s) {self.single_gpu_ids}")
+        print(f"Ἳ0 TranscriberPool: single-GPU slots on GPU(s) {self.single_gpu_ids}")
 
         # gpu_id -> WhisperTranscriber (one resident transcriber per GPU)
         self.single_gpu_pool: Dict[int, WhisperTranscriber] = {}
@@ -166,7 +166,7 @@ class TranscriberPool:
 
             if cached_gpu is not None:
                 self.gpu_active[cached_gpu] += 1
-                print(f"♻️  Reusing GPU {cached_gpu} transcriber "
+                print(f"♛️  Reusing GPU {cached_gpu} transcriber "
                       f"(active={self.gpu_active[cached_gpu]}, model={model_size})")
                 return self.single_gpu_pool[cached_gpu], cached_gpu
 
@@ -316,11 +316,11 @@ def process_audio(
         return format_progress_html(pct, msg), "", None, *_NO_TRANSLATION
 
     print(f"\n{'=' * 60}")
-    print(f"🎬 Starting session: {session_id}")
+    print(f"🎦 Starting session: {session_id}")
     print(f"{'=' * 60}\n")
 
     try:
-        # ── Input preparation ──────────────────────────────────────────
+        # ── Input preparation ──────────────────────────────────────────────
         if youtube_url and youtube_url.strip():
             if not is_youtube_url(youtube_url):
                 yield "❌ Invalid YouTube URL", "", None, *_NO_TRANSLATION
@@ -387,7 +387,7 @@ def process_audio(
             audio_duration = 0.0
 
         # ── Transcription ──────────────────────────────────────────────
-        # ── VAD ──────────────────────────────────────────────────────
+        # ── VAD ──────────────────────────────────────────────────
         # Running VAD here — after enhancement — guarantees speech detection
         # always operates on the cleaned-up audio.
         vad_chunks = None
@@ -500,7 +500,7 @@ def process_audio(
             translated_col_update  = gr.update(visible=True)
             print(f"💾 Translated SRT saved: {translated_srt_path}")
 
-        # ── Final status ───────────────────────────────────────────────
+        # ── Final status ────────────────────────────────────────────────
         processing_time = time.time() - start_time
         parts = [f"✅ 轉識完成！共 {len(asr_segments)} 段字幕。"]
         if audio_duration > 0:
@@ -546,7 +546,7 @@ def process_audio(
                 pass
 
 
-# ── Gradio interface ──────────────────────────────────────────────────────────
+# ── Gradio interface ─────────────────────────────────────────────────────────────────────────────────
 
 def create_interface() -> gr.Blocks:
 
@@ -562,11 +562,11 @@ def create_interface() -> gr.Blocks:
             ## 臺灣語音辨識暨翻譯系統
 
             ### Model Developers
-            - **[李鴻欣 Hung-Shin Lee](https://www.linkedin.com/in/hungshinlee)**（聯和科創股份有限公司）
-            - **[陳力瑋 Li-Wei Chen](mailto:wayne900619@gmail.com)**（國立清華大學資訊工程學研究所）
+            - **[李鴻昕 Hung-Shin Lee](https://www.linkedin.com/in/hungshinlee)**（聯和科創股份有限公司）
+            - **[陳力瑫 Li-Wei Chen](mailto:wayne900619@gmail.com)**（國立清華大學資訊工程學研究所）
             ### Machine Providers (RTX 2080 Ti * 4)
             - **[王新民 Hsin-Min Wang](https://homepage.iis.sinica.edu.tw/pages/whm/index_zh.html)**（中央研究院資訊科學研究所）
-            - **[廖沛俊 Pei-Jun Liao](mailto:newsboy3423@gmail.com)**（中央研究院資訊科學研究所）
+            - **[廖沛俳 Pei-Jun Liao](mailto:newsboy3423@gmail.com)**（中央研究院資訊科學研究所）
             """
         )
 
@@ -661,16 +661,11 @@ def create_interface() -> gr.Blocks:
                         if not task_interactive else None,
                     )
 
-                with gr.Row():
-                    use_vad_checkbox   = gr.Checkbox(value=True,  label="Enable VAD")
-                    merge_checkbox     = gr.Checkbox(value=True,  label="Merge Short Subtitles")
-                    zh_conv_checkbox   = gr.Checkbox(value=False, label="Convert to zh-TW")
-
                 # Speech Enhancement controls
                 with gr.Column(visible=True) as enhancement_col:
                     use_enhancement_checkbox = gr.Checkbox(
                         value=True,
-                        label="🔊 Speech Enhancement (DeepFilterNet3)",
+                        label="🔊 Speech Enhancement",
                         interactive=SPEECH_ENHANCEMENT_AVAILABLE,
                         info=None if SPEECH_ENHANCEMENT_AVAILABLE
                              else "deepfilternet not installed",
@@ -681,6 +676,11 @@ def create_interface() -> gr.Blocks:
                         visible=True,
                         interactive=True,
                     )
+
+                with gr.Row():
+                    use_vad_checkbox   = gr.Checkbox(value=True,  label="Enable VAD")
+                    merge_checkbox     = gr.Checkbox(value=True,  label="Merge Short Subtitles")
+                    zh_conv_checkbox   = gr.Checkbox(value=False, label="Convert to zh-TW")
 
                 # LLM controls — wrapped in Column to avoid Gradio hidden-element event bugs
                 with gr.Column(visible=False) as llm_col:
@@ -911,43 +911,35 @@ def create_interface() -> gr.Blocks:
 
         # Ground truth textbox — read-only, populated when an example is clicked
         ground_truth_textbox = gr.Textbox(
-            label="Ground Truth (客語漢字)",
+            label="Ground Truth",
             info="此範例音檔的標準參考文字",
             interactive=False,
             lines=3,
         )
 
-        _EXAMPLE_DEFAULTS = dict(
-            youtube_url="",
-            model_size="formospeech/whisper-large-v2-taiwanese-hakka-v1",
-            language="hakka",
-            task="transcribe",
-        )
+        _EXAMPLE_MODEL = "formospeech/whisper-large-v2-taiwanese-hakka-v1"
 
         gr.Examples(
             examples=[
                 [
                     "samples/734a04794010481cb3eed411b6e005cc.wav",
-                    _EXAMPLE_DEFAULTS["youtube_url"],
-                    _EXAMPLE_DEFAULTS["model_size"],
-                    _EXAMPLE_DEFAULTS["language"],
-                    _EXAMPLE_DEFAULTS["task"],
-                    "下二隻月就愛過年吔，魚仔相關个產品就開始起價，因為呢愛分民眾在防疫期間乜買得著萋萋个魚貨，苗栗魚市場就特別推出咧限量个過年禮盒，用網路，注文還過送貨到屋个服務，還過較便宜个價數，分苗栗鄉親在屋下裡肚，乜買得著萋萋又有保障个魚貨。",
+                    "hakka",
+                    _EXAMPLE_MODEL,
+                    "transcribe",
+                    "下二隻月就愛過年咔，魚仑相關個產品就開始起價，因為呢愛分民眾在防疫期間乞買得著萋萋個魚貨，苗栗魚市場就特別推出咋限量個過年禮盒，用網路，注文還過送貨到屋個服務，還過較便宜個價數，分苗栗鄉親在屋下裡肥，乞買得著萋萋又有保障個魚貨。",
                 ],
                 [
                     "samples/874062dc1657497b9ac996971c9ce4bb.wav",
-                    _EXAMPLE_DEFAULTS["youtube_url"],
-                    _EXAMPLE_DEFAULTS["model_size"],
-                    _EXAMPLE_DEFAULTS["language"],
-                    _EXAMPLE_DEFAULTS["task"],
-                    "這隻世界項有當多人高不將愛摎自家个夢想放忒去，你既然做得追求你个夢想，你就愛認真煞猛分佢兜試著當見笑啊。",
+                    "hakka",
+                    _EXAMPLE_MODEL,
+                    "transcribe",
+                    "這隻世界項有當多人高不將愛摇自家個夢想放忌去，你既然做得追求你個夢想，你就愛認真薤猛分作匹試著當見笑啊。",
                 ],
             ],
             inputs=[
                 audio_input,
-                youtube_input,
-                model_dropdown,
                 language_selector,
+                model_dropdown,
                 task_radio,
                 ground_truth_textbox,
             ],
