@@ -611,10 +611,19 @@ def process_audio(
 
 def create_interface() -> gr.Blocks:
 
+    _HEAD_HTML = """
+<meta property="og:title" content="FormoSST：臺灣語音辨識暨翻譯系統" />
+<meta property="og:description" content="支援國語、客語、台語、英語的語音辨識服務，可將音檔或 YouTube 影片轉換為 SRT 字幕檔。" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://formosst.iis.sinica.edu.tw/" />
+<meta name="description" content="支援國語、客語、台語、英語的語音辨識服務，可將音檔或 YouTube 影片轉換為 SRT 字幕檔。" />
+"""
+
     with gr.Blocks(
-        title="FormoSST: Speech-to-Text System for Taiwanese Languages",
+        title="FormoSST：臺灣語音辨識暨翻譯系統",
         theme=gr.themes.Soft(),
         css=CUSTOM_CSS,
+        head=_HEAD_HTML,
         analytics_enabled=False,
     ) as app:
         gr.Markdown(
@@ -752,7 +761,7 @@ def create_interface() -> gr.Blocks:
                 # Speech Enhancement controls
                 with gr.Column(visible=True) as enhancement_col:
                     use_enhancement_checkbox = gr.Checkbox(
-                        value=True,
+                        value=False,
                         label="🔊 Speech Enhancement",
                         interactive=SPEECH_ENHANCEMENT_AVAILABLE,
                         info=None if SPEECH_ENHANCEMENT_AVAILABLE
@@ -1029,12 +1038,12 @@ def create_interface() -> gr.Blocks:
                 [
                     "samples/734a04794010481cb3eed411b6e005cc.wav",
                     "hakka",
-                    "下二隻月就愛過年咔，魚仑相關個產品就開始起價，因為呢愛分民眾在防疫期間乞買得著萋萋個魚貨，苗栗魚市場就特別推出咋限量個過年禮盒，用網路，注文還過送貨到屋個服務，還過較便宜個價數，分苗栗鄉親在屋下裡肥，乞買得著萋萋又有保障個魚貨。",
+                    "下二隻月就愛過年吔，魚仔相關个產品就開始起價，因為呢愛分民眾在防疫期間乜買得著萋萋个魚貨，苗栗魚市場就特別推出咧限量个過年禮盒，用網路，注文還過送貨到屋个服務，還過較便宜个價數，分苗栗鄉親在屋下裡肚，乜買得著萋萋又有保障个魚貨。",
                 ],
                 [
                     "samples/874062dc1657497b9ac996971c9ce4bb.wav",
                     "hakka",
-                    "這隻世界項有當多人高不將愛摇自家個夢想放忌去，你既然做得追求你個夢想，你就愛認真薤猛分作匹試著當見笑啊。",
+                    "這隻世界項有當多人高不將愛摎自家个夢想放忒去，你既然做得追求你个夢想，你就愛認真煞猛分佢兜試著當見笑啊。",
                 ],
                 [
                     "samples/fmZk_OSHbiY.wav",
