@@ -256,6 +256,34 @@ def format_progress_html(percent: int, message: str) -> str:
 """
 
 
+# Formats that soundfile cannot decode — must be converted to WAV first.
+_SF_UNSUPPORTED_EXTS = {'.aac', '.m4a', '.m4b', '.opus', '.wma', '.amr', '.3gp', '.3gpp'}
+
+
+def _ensure_wav(src_path: str, session_dir: str) -> str:
+    """
+    If src_path has an extension that soundfile cannot read, convert it to WAV
+    via ffmpeg and return the new path.  Otherwise return src_path unchanged.
+    """
+    ext = os.path.splitext(src_path)[1].lower()
+    if ext not in _SF_UNSUPPORTED_EXTS:
+        return src_path
+
+    wav_path = os.path.join(
+        session_dir,
+        f"converted_{uuid.uuid4().hex[:8]}.wav",
+    )
+    print(f"🔄 Converting {ext} → WAV: {wav_path}")
+    import subprocess
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", src_path, "-ar", "16000", "-ac", "1", wav_path],
+        capture_output=True,
+        check=True,
+    )
+    print("✅ Conversion complete")
+    return wav_path
+
+
 def _save_srt(srt_content: str, safe_title: str, suffix: str, output_dir: str) -> str:
     """Write SRT content to a file and return the path."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -361,11 +389,14 @@ def process_audio(
                 f"upload_{uuid.uuid4().hex[:8]}{os.path.splitext(audio_file)[1]}",
             )
             shutil.copy2(audio_file, upload_copy)
-            audio_path = upload_copy
             temp_files.append(upload_copy)
             video_title = os.path.splitext(os.path.basename(audio_file))[0]
+            # Convert AAC / M4A / etc. to WAV so that soundfile can read it
+            audio_path = _ensure_wav(upload_copy, session_dir)
+            if audio_path != upload_copy:
+                temp_files.append(audio_path)
             yield prog(10, "Audio file loaded and copied to session")
-            print(f"📁 Uploaded file copied to session: {upload_copy}")
+            print(f"📁 Uploaded file in session: {audio_path}")
         else:
             yield "❌ Please upload an audio file or enter a YouTube URL", "", None, *_NO_TRANSLATION
             return
