@@ -257,7 +257,7 @@ def format_progress_html(percent: int, message: str) -> str:
 
 
 # Formats that soundfile cannot decode — must be converted to WAV first.
-_SF_UNSUPPORTED_EXTS = {'.aac', '.m4a', '.m4b', '.opus', '.wma', '.amr', '.3gp', '.3gpp'}
+_SF_UNSUPPORTED_EXTS = {'.mp3', '.aac', '.m4a', '.m4b', '.opus', '.wma', '.amr', '.3gp', '.3gpp'}
 
 
 def _ensure_wav(src_path: str, session_dir: str) -> str:
