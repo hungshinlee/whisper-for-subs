@@ -55,6 +55,15 @@ def _patch_model_config(model_dir: str, n_mels: int) -> None:
         print(f"✅ Patched {filename}: {keys} = {n_mels} in {model_dir}")
 
 
+# ---------------------------------------------------------------------------
+# Private model IDs — loaded from environment variables so they are never
+# committed to the repository.  Set these in your .env file.
+# ---------------------------------------------------------------------------
+_HAKKA_V2_MODEL  = os.environ.get("HAKKA_V2_MODEL",  "")
+_HAKKA_V3_MODEL  = os.environ.get("HAKKA_V3_MODEL",  "")
+_TAIGI_MODEL     = os.environ.get("TAIGI_MODEL",     "")
+
+
 def ensure_model_ready(model_name: str) -> str:
     """
     Ensure the model is in CTranslate2 format.
@@ -67,20 +76,17 @@ def ensure_model_ready(model_name: str) -> str:
         Path to the usable model (CT2 format)
     """
     # Models that need conversion from HuggingFace transformers → CTranslate2
-    CUSTOM_MODELS = {
-        "formospeech/whisper-large-v2-taiwanese-hakka-v1": (
-            "whisper-large-v2-taiwanese-hakka-v1-ct2", 80,
-        ),
-        "formospeech/whisper-large-v3-taiwanese-hakka": (
-            "whisper-large-v3-taiwanese-hakka-ct2", 128,
-        ),
-    }
+    CUSTOM_MODELS: dict = {}
+    if _HAKKA_V2_MODEL:
+        CUSTOM_MODELS[_HAKKA_V2_MODEL] = ("whisper-large-v2-taiwanese-hakka-v1-ct2", 80)
+    if _HAKKA_V3_MODEL:
+        CUSTOM_MODELS[_HAKKA_V3_MODEL] = ("whisper-large-v3-taiwanese-hakka-ct2", 128)
 
     # Models already in CT2 format on HuggingFace — no conversion needed,
     # but we still patch n_mels in the cached snapshot after download.
-    NATIVE_CT2_MODELS = {
-        "PRIVATE_TAIGI_MODEL": 80,
-    }
+    NATIVE_CT2_MODELS: dict = {}
+    if _TAIGI_MODEL:
+        NATIVE_CT2_MODELS[_TAIGI_MODEL] = 80
 
     if model_name in NATIVE_CT2_MODELS:
         n_mels = NATIVE_CT2_MODELS[model_name]
@@ -156,7 +162,9 @@ def ensure_model_ready(model_name: str) -> str:
 SUPPORTED_LANGUAGES = {"auto": "Auto", "zh": "Mandarin", "en": "English"}
 
 # Model configurations with labels
-MODEL_CONFIGS = {
+# General models are always available; language-specific models are added
+# only when the corresponding environment variable is set.
+MODEL_CONFIGS: dict = {
     "large-v3": {
         "label": "General",
         "display_name": "whisper-large-v3",
@@ -165,19 +173,13 @@ MODEL_CONFIGS = {
         "label": "General",
         "display_name": "whisper-large-v3-turbo",
     },
-    "formospeech/whisper-large-v2-taiwanese-hakka-v1": {
-        "label": "Hakka",
-        "display_name": "whisper-large-v2-hakka",
-    },
-    "formospeech/whisper-large-v3-taiwanese-hakka": {
-        "label": "Hakka",
-        "display_name": "whisper-large-v3-hakka",
-    },
-    "PRIVATE_TAIGI_MODEL": {
-        "label": "Taigi",
-        "display_name": "whisper-large-v2-taigi",
-    },
 }
+if _HAKKA_V2_MODEL:
+    MODEL_CONFIGS[_HAKKA_V2_MODEL] = {"label": "Hakka", "display_name": "whisper-large-v2-hakka"}
+if _HAKKA_V3_MODEL:
+    MODEL_CONFIGS[_HAKKA_V3_MODEL] = {"label": "Hakka", "display_name": "whisper-large-v3-hakka"}
+if _TAIGI_MODEL:
+    MODEL_CONFIGS[_TAIGI_MODEL]    = {"label": "Taigi", "display_name": "whisper-large-v2-taigi"}
 
 MODEL_SIZES = list(MODEL_CONFIGS.keys())
 

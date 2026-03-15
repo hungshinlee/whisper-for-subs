@@ -35,6 +35,10 @@ services:
       - ENABLE_LLM=${ENABLE_LLM:-false}
       - OLLAMA_HOST=http://ollama:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
+      # Private model IDs (set in .env, never committed)
+      - HAKKA_V2_MODEL=${HAKKA_V2_MODEL:-}
+      - HAKKA_V3_MODEL=${HAKKA_V3_MODEL:-}
+      - TAIGI_MODEL=${TAIGI_MODEL:-}
     depends_on:
       ollama:
         condition: service_started
