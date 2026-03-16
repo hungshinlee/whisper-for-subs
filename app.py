@@ -1133,12 +1133,7 @@ def main():
         server_port=int(os.environ.get("GRADIO_SERVER_PORT", 7860)),
         auth=auth_list,
         auth_message="FormoSST",
-        show_api=False,
         share=False,
-        app_kwargs={
-            "docs_url": None,
-            "redoc_url": None,
-        },
     )
 
 if __name__ == "__main__":
