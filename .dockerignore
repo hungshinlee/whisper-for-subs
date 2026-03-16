@@ -25,6 +25,9 @@ docker-compose.yml
 .docker/
 .dockerignore
 
+# Credentials
+.users
+
 # Documentation
 README.md
 docs/

@@ -19,6 +19,9 @@ ENV/
 .DS_Store
 Thumbs.db
 
+# Credentials
+.users
+
 # Project specific
 uploads/
 outputs/

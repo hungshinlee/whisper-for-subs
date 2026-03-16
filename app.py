@@ -1109,19 +1109,54 @@ def main():
     gradio_app = create_interface()
     gradio_app.queue(max_size=10, default_concurrency_limit=2, api_open=False)
 
-    # Mount with optional password and API disabled
-    _password = os.environ.get("GRADIO_PASSWORD", "").strip()
+    # ── Authentication ─────────────────────────────────────────────────
+    # Load credentials from .users file (format: "username:password" per line).
+    # Falls back to GRADIO_PASSWORD env var for single-user / legacy setups.
+    # If neither is configured, the service runs without authentication.
+    def _load_users() -> dict:
+        """Parse .users into {username: password}. Ignores blank lines and comments."""
+        # Look for .users next to app.py first, then fall back to /app/.users (Docker)
+        candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), ".users"),
+            "/app/.users",
+        ]
+        users_file = next((p for p in candidates if os.path.exists(p)), None)
+        users = {}
+        if users_file is None:
+            return users
+        with open(users_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if ":" not in line:
+                    continue
+                username, password = line.split(":", 1)
+                users[username.strip()] = password.strip()
+        return users
+
+    _users = _load_users()
+
+    # Fallback: GRADIO_PASSWORD env var → single "admin" account
+    if not _users:
+        _legacy_pw = os.environ.get("GRADIO_PASSWORD", "").strip()
+        if _legacy_pw:
+            _users = {"admin": _legacy_pw}
+
     mount_kwargs = dict(
         app=fastapi_app,
         blocks=gradio_app,
         path="/",
     )
-    if _password:
-        mount_kwargs["auth"] = ("admin", _password)
-        mount_kwargs["auth_message"] = "請輸入密碼以使用本系統"
-        print(f"🔒 Password protection enabled")
+    if _users:
+        def _auth_fn(username: str, password: str) -> bool:
+            return _users.get(username) == password
+
+        mount_kwargs["auth"] = _auth_fn
+        mount_kwargs["auth_message"] = "請輸入帳號與密碼以使用本系統"
+        print(f"🔒 Authentication enabled ({len(_users)} user(s): {', '.join(_users.keys())})")
     else:
-        print("⚠️  GRADIO_PASSWORD not set — running without authentication")
+        print("⚠️  No credentials configured — running without authentication")
     fastapi_app = gr.mount_gradio_app(**mount_kwargs)
 
     import uvicorn

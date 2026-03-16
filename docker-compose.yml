@@ -19,6 +19,8 @@ services:
       - ./outputs:/app/outputs
       # Docs for static file serving
       - ./docs:/app/docs
+      # User credentials (never committed to git)
+      - ./.users:/app/.users:ro
     environment:
       # GPU 0-1 reserved for Whisper parallel transcription.
       # GPU 2-3 reserved for Ollama LLM (when ENABLE_LLM=true).
