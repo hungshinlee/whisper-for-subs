@@ -612,14 +612,14 @@ def process_audio(
 def create_interface() -> gr.Blocks:
 
     with gr.Blocks(
-        title="FormoSST: Speech-to-Text System for Taiwanese Languages",
+        title="FormoSTT: Speech-to-Text System for Taiwanese Languages",
         theme=gr.themes.Soft(),
         css=CUSTOM_CSS,
         analytics_enabled=False,
     ) as app:
         gr.Markdown(
             """
-            # FormoSST: Speech-to-Text System for Taiwanese Languages
+            # FormoSTT: Speech-to-Text System for Taiwanese Languages
             ## 臺灣語音辨識暨翻譯系統
 
             ### Model Developers
@@ -1132,7 +1132,7 @@ def main():
         server_name=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
         server_port=int(os.environ.get("GRADIO_SERVER_PORT", 7860)),
         auth=auth_list,
-        auth_message="FormoSST",
+        auth_message="FormoSTT",
         share=False,
     )
 

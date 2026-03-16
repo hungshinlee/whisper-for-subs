@@ -1,4 +1,4 @@
-# FormoSST: Speech-to-Text System for Taiwanese Languages 🎙️
+# FormoSTT: Speech-to-Text System for Taiwanese Languages 🎙️
 
 **臺灣語音辨識暨翻譯系統**
 
@@ -339,4 +339,4 @@ MIT License — 詳見 [LICENSE](LICENSE) 文件
 
 ---
 
-**© 2024–2026 FormoSST Team. All rights reserved.**
+**© 2024–2026 FormoSTT Team. All rights reserved.**
