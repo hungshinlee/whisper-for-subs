@@ -1132,7 +1132,7 @@ def main():
         server_name=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
         server_port=int(os.environ.get("GRADIO_SERVER_PORT", 7860)),
         auth=auth_list,
-        auth_message="FormoSTT",
+        auth_message="FormoSTT 臺灣語音辨識暨翻譯系統",
         share=False,
     )
 
