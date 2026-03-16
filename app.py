@@ -1157,7 +1157,7 @@ def main():
 
         mount_kwargs["auth"] = _auth_fn
         mount_kwargs["auth_message"] = (
-            "<h1>FormoSST: Speech-to-Text System for Taiwanese Languages</h1>"
+            "<h1>FormoSTT: Speech-to-Text System for Taiwanese Languages</h1>"
             "<p style='color:#555;margin-top:0px'>臺灣語音辨識暨翻譯系統</p>"
             "<hr style='margin:12px 0'>"
             "<b>Model Developers</b>"
