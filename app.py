@@ -1156,11 +1156,7 @@ def main():
             return _verify_password(stored, password)
 
         mount_kwargs["auth"] = _auth_fn
-        mount_kwargs["auth_message"] = (
-            "FormoSST: Speech-to-Text System for Taiwanese Languages\n"
-            "臺灣語音辨識暨翻譯系統\n\n"
-            "使用者條款、資訊安全與隱私權政策: /terms-and-privacy"
-        )
+        mount_kwargs["auth_message"] = "FormoSST"
         print(f"🔒 Authentication enabled ({len(_users)} user(s): {', '.join(_users.keys())})")
     else:
         print("⚠️  No credentials configured — running without authentication")
