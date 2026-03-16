@@ -1150,22 +1150,25 @@ def main():
     )
     if _users:
         def _auth_fn(username: str, password: str) -> bool:
-            return _users.get(username) == password
+            stored = _users.get(username)
+            if stored is None:
+                return False
+            return _verify_password(stored, password)
 
         mount_kwargs["auth"] = _auth_fn
         mount_kwargs["auth_message"] = (
-            "<h2>FormoSST: Speech-to-Text System for Taiwanese Languages</h2>"
-            "<p style='color:#555;margin-top:-8px'>臺灣語音辨識暨翻譯系統</p>"
+            "<h1>FormoSST: Speech-to-Text System for Taiwanese Languages</h1>"
+            "<p style='color:#555;margin-top:0px'>臺灣語音辨識暨翻譯系統</p>"
             "<hr style='margin:12px 0'>"
             "<b>Model Developers</b>"
             "<ul style='margin:4px 0 8px 0;padding-left:18px'>"
-            "<li><b>李鴻欣 Hung-Shin Lee</b>（聯和科創股份有限公司）</li>"
-            "<li><b>陳力瑋 Li-Wei Chen</b>（國立清華大學資訊工程學研究所）</li>"
+            "<li>李鴻欣 Hung-Shin Lee（聯和科創股份有限公司）</li>"
+            "<li>陳力瑋 Li-Wei Chen（國立清華大學資訊工程學研究所）</li>"
             "</ul>"
             "<b>Machine Providers (RTX 2080 Ti × 4)</b>"
             "<ul style='margin:4px 0 8px 0;padding-left:18px'>"
-            "<li><b>王新民 Hsin-Min Wang</b>（中央研究院資訊科學研究所）</li>"
-            "<li><b>廖沛俊 Pei-Jun Liao</b>（中央研究院資訊科學研究所）</li>"
+            "<li>王新民 Hsin-Min Wang（中央研究院資訊科學研究所）</li>"
+            "<li>廖沛俊 Pei-Jun Liao（中央研究院資訊科學研究所）</li>"
             "</ul>"
             "<b>Supported Languages</b>"
             "<p style='margin:4px 0 8px 0'>Mandarin, Hakka, Taigi, and English</p>"
