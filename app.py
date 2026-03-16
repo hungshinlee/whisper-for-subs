@@ -1149,17 +1149,12 @@ def main():
         path="/",
     )
     if _users:
-        def _auth_fn(username: str, password: str) -> bool:
-            stored = _users.get(username)
-            if stored is None:
-                return False
-            return _verify_password(stored, password)
-
-        mount_kwargs["auth"] = _auth_fn
+        auth_list = [(u, p) for u, p in _users.items()]
+        mount_kwargs["auth"] = auth_list
         mount_kwargs["auth_message"] = "FormoSST"
-        print(f"🔒 Authentication enabled ({len(_users)} user(s): {', '.join(_users.keys())})")
+        print("Authentication enabled: " + ", ".join(_users.keys()))
     else:
-        print("⚠️  No credentials configured — running without authentication")
+        print("No credentials configured - running without authentication")
     fastapi_app = gr.mount_gradio_app(**mount_kwargs)
 
     import uvicorn
