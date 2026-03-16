@@ -1157,27 +1157,9 @@ def main():
 
         mount_kwargs["auth"] = _auth_fn
         mount_kwargs["auth_message"] = (
-            "<div style='font-family:sans-serif;text-align:left;margin-bottom:8px'>"
-            "<div style='font-size:18px;font-weight:700;margin-bottom:2px'>"
-            "FormoSST: Speech-to-Text System for Taiwanese Languages</div>"
-            "<div style='font-size:13px;color:#666;margin-bottom:10px'>臺灣語音辨識暨翻譯系統</div>"
-            "<div style='border-top:1px solid #ddd;margin:8px 0'></div>"
-            "<div style='font-size:13px'>"
-            "<b>Model Developers</b><br>"
-            "&nbsp;&nbsp;李鴻欣 Hung-Shin Lee（聯和科創）<br>"
-            "&nbsp;&nbsp;陳力瑋 Li-Wei Chen（國立清華大學）<br>"
-            "<b>Machine Providers</b> (RTX 2080 Ti × 4)<br>"
-            "&nbsp;&nbsp;王新民 Hsin-Min Wang（中央研究院）<br>"
-            "&nbsp;&nbsp;廖沛俊 Pei-Jun Liao（中央研究院）<br>"
-            "<b>Supported Languages</b><br>"
-            "&nbsp;&nbsp;Mandarin, Hakka, Taigi, English"
-            "</div>"
-            "<div style='border-top:1px solid #ddd;margin:8px 0'></div>"
-            "<div style='font-size:13px'>"
-            "<a href='/terms-and-privacy' target='_blank' style='color:#1976d2'>"
-            "使用者條款、資訊安全與隱私權政策 (Terms and Privacy Policy)"
-            "</a></div>"
-            "</div>"
+            "FormoSST: Speech-to-Text System for Taiwanese Languages\n"
+            "臺灣語音辨識暨翻譯系統\n\n"
+            "使用者條款、資訊安全與隱私權政策: /terms-and-privacy"
         )
         print(f"🔒 Authentication enabled ({len(_users)} user(s): {', '.join(_users.keys())})")
     else:
