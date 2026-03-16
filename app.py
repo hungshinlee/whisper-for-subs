@@ -1089,33 +1089,9 @@ def main():
         transcriber_pool.release_single_gpu_transcriber(gpu_id)
         print("✅ Model pre-loaded")
 
-    fastapi_app = FastAPI()
-
-    @fastapi_app.get("/terms-and-privacy")
-    async def serve_pdf():
-        pdf_path = (
-            "/app/docs/Terms_and_Privacy.pdf"
-            if os.path.exists("/app/docs/Terms_and_Privacy.pdf")
-            else "docs/Terms_and_Privacy.pdf"
-        )
-        if os.path.exists(pdf_path):
-            return FileResponse(
-                pdf_path,
-                media_type="application/pdf",
-                headers={"Content-Disposition": "inline; filename=Terms_and_Privacy.pdf"},
-            )
-        return {"error": "File not found"}
-
-    gradio_app = create_interface()
-    gradio_app.queue(max_size=10, default_concurrency_limit=2, api_open=False)
-
-    # ── Authentication ─────────────────────────────────────────────────
-    # Load credentials from .users file (format: "username:password" per line).
-    # Falls back to GRADIO_PASSWORD env var for single-user / legacy setups.
-    # If neither is configured, the service runs without authentication.
+    # ── Load credentials ───────────────────────────────────────────────
     def _load_users() -> dict:
         """Parse .users into {username: password}. Ignores blank lines and comments."""
-        # Look for .users next to app.py first, then fall back to /app/.users (Docker)
         candidates = [
             os.path.join(os.path.dirname(os.path.abspath(__file__)), ".users"),
             "/app/.users",
@@ -1136,34 +1112,34 @@ def main():
         return users
 
     _users = _load_users()
-
-    # Fallback: GRADIO_PASSWORD env var → single "admin" account
     if not _users:
         _legacy_pw = os.environ.get("GRADIO_PASSWORD", "").strip()
         if _legacy_pw:
             _users = {"admin": _legacy_pw}
 
-    mount_kwargs = dict(
-        app=fastapi_app,
-        blocks=gradio_app,
-        path="/",
-    )
-    if _users:
-        auth_list = [(u, p) for u, p in _users.items()]
-        mount_kwargs["auth"] = auth_list
-        mount_kwargs["auth_message"] = "FormoSST"
+    auth_list = [(u, p) for u, p in _users.items()] if _users else None
+    if auth_list:
         print("Authentication enabled: " + ", ".join(_users.keys()))
     else:
         print("No credentials configured - running without authentication")
-    fastapi_app = gr.mount_gradio_app(**mount_kwargs)
 
-    import uvicorn
-    uvicorn.run(
-        fastapi_app,
-        host=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
-        port=int(os.environ.get("GRADIO_SERVER_PORT", 7860)),
+    # ── Build Gradio app and add PDF route ─────────────────────────────
+    gradio_app = create_interface()
+    gradio_app.queue(max_size=10, default_concurrency_limit=2, api_open=False)
+
+    # Launch using Gradio's native launch() — most reliable auth support
+    gradio_app.launch(
+        server_name=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
+        server_port=int(os.environ.get("GRADIO_SERVER_PORT", 7860)),
+        auth=auth_list,
+        auth_message="FormoSST",
+        show_api=False,
+        share=False,
+        app_kwargs={
+            "docs_url": None,
+            "redoc_url": None,
+        },
     )
-
 
 if __name__ == "__main__":
     main()
