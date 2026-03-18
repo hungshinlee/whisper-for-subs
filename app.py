@@ -50,6 +50,20 @@ SPEECH_ENHANCEMENT_AVAILABLE = is_deepfilter_available()
 # Whether LLM translation is available in this deployment
 LLM_ENABLED = is_llm_enabled()
 
+# ── Model ID lists — derived from MODEL_CONFIGS (single source of truth) ─────
+# MODEL_CONFIGS only adds an entry when the corresponding env var is set, so
+# these lists are empty when a language-specific model is not configured.
+# All UI code must use these constants rather than hardcoding model IDs.
+GENERAL_MODELS_IDS: list = [
+    m for m, cfg in MODEL_CONFIGS.items() if cfg["label"] == "General"
+]
+HAKKA_MODELS_IDS: list = [
+    m for m, cfg in MODEL_CONFIGS.items() if cfg["label"] == "Hakka"
+]
+TAIGI_MODELS_IDS: list = [
+    m for m, cfg in MODEL_CONFIGS.items() if cfg["label"] == "Taigi"
+]
+
 
 # Custom CSS with Roboto font
 CUSTOM_CSS = """
@@ -172,9 +186,6 @@ class TranscriberPool:
 
             else:
                 # ── Priority 1: cached model + idle GPU ───────────────────────
-                # Probe each GPU's semaphore non-blocking; if we can grab it the
-                # GPU is idle right now.  Release immediately — we re-acquire
-                # below (outside the lock) as the real serialisation point.
                 idle_cached_gpu = None
                 for gid, t in self.single_gpu_pool.items():
                     if t.model_size == model_size:
@@ -193,8 +204,6 @@ class TranscriberPool:
 
                 else:
                     # ── Priority 2: any completely free GPU ───────────────────
-                    # Spread load: load the model on a free GPU so it can start
-                    # immediately rather than queue behind a busy GPU.
                     free_gpu = next(
                         (gid for gid in self.single_gpu_ids
                          if self.gpu_active.get(gid, 0) == 0),
@@ -257,7 +266,6 @@ class TranscriberPool:
                             print(f"✅ GPU {gpu_id} ready (queued={self.gpu_active[gpu_id]})")
 
         # ── Step 2: wait for GPU to be free (OUTSIDE pool lock) ──────────────
-        # Only one transcription runs per GPU at a time.
         sem = self.gpu_semaphores.get(gpu_id)
         if sem is not None:
             if not sem.acquire(blocking=False):
@@ -339,24 +347,17 @@ _SF_UNSUPPORTED_EXTS = {'.mp3', '.aac', '.m4a', '.m4b', '.opus', '.wma', '.amr',
 
 
 def _ensure_wav(src_path: str, session_dir: str) -> str:
-    """
-    If src_path has an extension that soundfile cannot read, convert it to WAV
-    via ffmpeg and return the new path.  Otherwise return src_path unchanged.
-    """
+    """Convert non-WAV formats to WAV via ffmpeg; return src_path unchanged if already WAV."""
     ext = os.path.splitext(src_path)[1].lower()
     if ext not in _SF_UNSUPPORTED_EXTS:
         return src_path
 
-    wav_path = os.path.join(
-        session_dir,
-        f"converted_{uuid.uuid4().hex[:8]}.wav",
-    )
+    wav_path = os.path.join(session_dir, f"converted_{uuid.uuid4().hex[:8]}.wav")
     print(f"🔄 Converting {ext} → WAV: {wav_path}")
     import subprocess
     subprocess.run(
         ["ffmpeg", "-y", "-i", src_path, "-ar", "16000", "-ac", "1", wav_path],
-        capture_output=True,
-        check=True,
+        capture_output=True, check=True,
     )
     print("✅ Conversion complete")
     return wav_path
@@ -374,7 +375,6 @@ def _save_srt(srt_content: str, safe_title: str, suffix: str, output_dir: str) -
 
 
 # Yield helper: 6-tuple used throughout process_audio
-# (status, asr_srt, asr_file, translated_col_update, translated_srt, translated_file)
 _NO_TRANSLATION = (gr.update(visible=False), "", None)
 
 
@@ -402,14 +402,11 @@ def process_audio(
         (status_html, asr_srt_text, asr_srt_file,
          translated_col_update, translated_srt_text, translated_srt_file)
     """
-    # UI-level language/task values — map to actual Whisper codes
     if language == "taigi":
-        # Taigi model is fine-tuned to output Mandarin; always use task="transcribe"
         language = "zh"
         task = "transcribe"
     elif language == "hakka":
         language = "zh"
-    # Safety fallback: translate_mandarin is a UI-only value
     if task == "translate_mandarin":
         task = "transcribe"
 
@@ -424,7 +421,6 @@ def process_audio(
     audio_duration = 0.0
     worker_id = None
 
-    # Shorthand for progress-only yields (translation panel stays hidden)
     def prog(pct, msg):
         return format_progress_html(pct, msg), "", None, *_NO_TRANSLATION
 
@@ -469,7 +465,6 @@ def process_audio(
             shutil.copy2(audio_file, upload_copy)
             temp_files.append(upload_copy)
             video_title = os.path.splitext(os.path.basename(audio_file))[0]
-            # Convert AAC / M4A / etc. to WAV so that soundfile can read it
             audio_path = _ensure_wav(upload_copy, session_dir)
             if audio_path != upload_copy:
                 temp_files.append(audio_path)
@@ -503,7 +498,6 @@ def process_audio(
             audio_duration = 0.0
 
         # ── VAD ────────────────────────────────────────────────────────
-        # Run VAD after enhancement so speech detection operates on clean audio.
         vad_chunks = None
         if use_vad:
             yield prog(32, "Detecting speech segments with VAD...")
@@ -524,7 +518,6 @@ def process_audio(
 
         yield prog(35, "Loading Whisper model...")
 
-        # Blocks here until the selected GPU is free (semaphore acquired inside).
         trans, worker_id = transcriber_pool.get_single_gpu_transcriber(
             model_size, use_vad, min_silence_duration_s
         )
@@ -547,15 +540,9 @@ def process_audio(
 
         print(f"📝 Generated {len(segments)} segments")
 
-        # ── Post-processing ────────────────────────────────────────────
-
         asr_segments = [seg.copy() for seg in segments]
 
-        # LLM translation
-        is_hakka_model = any(m in model_size for m in [
-            "formospeech/whisper-large-v2-taiwanese-hakka-v1",
-            "formospeech/whisper-large-v3-taiwanese-hakka",
-        ])
+        is_hakka_model = model_size in HAKKA_MODELS_IDS
         do_translate = translate_hakka and is_hakka_model and LLM_ENABLED
         translated_segments = None
 
@@ -586,7 +573,6 @@ def process_audio(
             if translated_segments is not None:
                 translated_segments = merge_segments(translated_segments, max_chars=max_chars)
 
-        # ── Generate SRT files ─────────────────────────────────────────
         yield prog(95, "Generating SRT file(s)...")
 
         output_dir = (
@@ -612,7 +598,6 @@ def process_audio(
             translated_col_update  = gr.update(visible=True)
             print(f"💾 Translated SRT saved: {translated_srt_path}")
 
-        # ── Final status ────────────────────────────────────────────────
         processing_time = time.time() - start_time
         rtf = (processing_time / audio_duration) if (audio_duration > 0 and processing_time > 0) else None
 
@@ -685,6 +670,17 @@ def process_audio(
 
 def create_interface() -> gr.Blocks:
 
+    # Build language radio choices dynamically — hide Hakka/Taigi if no model configured
+    lang_choices = [
+        ("Auto",     "auto"),
+        ("Mandarin", "zh"),
+        ("English",  "en"),
+    ]
+    if HAKKA_MODELS_IDS:
+        lang_choices.append(("Hakka", "hakka"))
+    if TAIGI_MODELS_IDS:
+        lang_choices.append(("Taigi", "taigi"))
+
     with gr.Blocks(
         title="FormoSTT: Speech-to-Text System for Taiwanese Languages",
         theme=gr.themes.Soft(),
@@ -740,41 +736,25 @@ def create_interface() -> gr.Blocks:
 
                 gr.Markdown("### ⚙️ Settings")
 
-                GENERAL_MODELS_IDS = ["large-v3", "large-v3-turbo"]
-                HAKKA_MODELS_IDS = [
-                    "formospeech/whisper-large-v2-taiwanese-hakka-v1",
-                    "formospeech/whisper-large-v3-taiwanese-hakka",
-                ]
-                TAIGI_MODELS_IDS = [
-                    "PRIVATE_TAIGI_MODEL",
-                ]
-
+                # Determine initial language / model from env
                 default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
-                default_is_hakka = any(m in default_model for m in HAKKA_MODELS_IDS)
-                default_is_taigi = any(m in default_model for m in TAIGI_MODELS_IDS)
-
-                if default_is_taigi:
-                    init_lang_sel = "taigi"
-                    init_model_value = default_model if default_model in TAIGI_MODELS_IDS else TAIGI_MODELS_IDS[0]
-                elif default_is_hakka:
-                    init_lang_sel = "hakka"
-                    init_model_value = default_model if default_model in HAKKA_MODELS_IDS else HAKKA_MODELS_IDS[0]
+                if default_model in TAIGI_MODELS_IDS:
+                    init_lang_sel    = "taigi"
+                    init_model_value = default_model
+                elif default_model in HAKKA_MODELS_IDS:
+                    init_lang_sel    = "hakka"
+                    init_model_value = default_model
                 else:
-                    init_lang_sel = "auto"
+                    init_lang_sel    = "auto"
                     init_model_value = default_model if default_model in GENERAL_MODELS_IDS else "large-v3-turbo"
 
                 language_selector = gr.Radio(
-                    choices=[
-                        ("Auto",     "auto"),
-                        ("Mandarin", "zh"),
-                        ("English",  "en"),
-                        ("Hakka",    "hakka"),
-                        ("Taigi",    "taigi"),
-                    ],
+                    choices=lang_choices,
                     value=init_lang_sel,
                     label="Language",
                 )
 
+                # Initial model choices depend on selected language
                 if init_lang_sel == "taigi":
                     init_model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in TAIGI_MODELS_IDS]
                 elif init_lang_sel == "hakka":
@@ -788,26 +768,40 @@ def create_interface() -> gr.Blocks:
                     label="Model",
                 )
 
-                if init_model_value in TAIGI_MODELS_IDS:
-                    init_task_choices     = [("Translate to Mandarin", "translate_mandarin")]
-                    init_task_value       = "translate_mandarin"
-                    init_task_interactive = False
-                    init_task_info        = "Taigi model always outputs Mandarin"
-                elif init_model_value == "large-v3-turbo":
-                    init_task_choices     = [("Transcribe", "transcribe")]
-                    init_task_value       = "transcribe"
-                    init_task_interactive = False
-                    init_task_info        = "Note: large-v3-turbo only supports Transcribe"
-                elif init_model_value in HAKKA_MODELS_IDS:
-                    init_task_choices     = [("Transcribe", "transcribe")]
-                    init_task_value       = "transcribe"
-                    init_task_interactive = False
-                    init_task_info        = "Hakka model only supports Transcribe"
-                else:
-                    init_task_choices     = [("Transcribe", "transcribe"), ("Translate to English", "translate")]
-                    init_task_value       = "transcribe"
-                    init_task_interactive = True
-                    init_task_info        = None
+                # Initial task choices depend on selected model
+                def _task_cfg_for_model(model_name):
+                    """Return (choices, value, interactive, info) for task_radio."""
+                    if model_name in TAIGI_MODELS_IDS:
+                        return (
+                            [("Translate to Mandarin", "translate_mandarin")],
+                            "translate_mandarin", False,
+                            "Taigi model always outputs Mandarin",
+                        )
+                    elif model_name == "large-v3-turbo":
+                        return (
+                            [("Transcribe", "transcribe")],
+                            "transcribe", False,
+                            "Note: large-v3-turbo only supports Transcribe",
+                        )
+                    elif model_name in HAKKA_MODELS_IDS:
+                        return (
+                            [("Transcribe", "transcribe")],
+                            "transcribe", False,
+                            "Hakka model only supports Transcribe",
+                        )
+                    else:
+                        return (
+                            [("Transcribe", "transcribe"), ("Translate to English", "translate")],
+                            "transcribe", True, None,
+                        )
+
+                def _task_update_for_model(model_name):
+                    choices, value, interactive, info = _task_cfg_for_model(model_name)
+                    return gr.update(choices=choices, value=value,
+                                     interactive=interactive, info=info)
+
+                init_task_choices, init_task_value, init_task_interactive, init_task_info = \
+                    _task_cfg_for_model(init_model_value)
 
                 with gr.Row():
                     task_radio = gr.Radio(
@@ -818,7 +812,7 @@ def create_interface() -> gr.Blocks:
                         info=init_task_info,
                     )
 
-                with gr.Column(visible=True) as enhancement_col:
+                with gr.Column(visible=True):
                     use_enhancement_checkbox = gr.Checkbox(
                         value=False,
                         label="🔊 Speech Enhancement",
@@ -929,51 +923,18 @@ def create_interface() -> gr.Blocks:
             ],
         )
 
-        _GENERAL_MODELS_IDS = ["large-v3", "large-v3-turbo"]
-        _HAKKA_MODELS_IDS = [
-            "formospeech/whisper-large-v2-taiwanese-hakka-v1",
-            "formospeech/whisper-large-v3-taiwanese-hakka",
-        ]
-        _TAIGI_MODELS_IDS = [
-            "PRIVATE_TAIGI_MODEL",
-        ]
-
-        def _task_update_for_model(model_name):
-            if model_name in _TAIGI_MODELS_IDS:
-                return gr.update(
-                    choices=[("Translate to Mandarin", "translate_mandarin")],
-                    value="translate_mandarin", interactive=False,
-                    info="Taigi model always outputs Mandarin",
-                )
-            elif model_name == "large-v3-turbo":
-                return gr.update(
-                    choices=[("Transcribe", "transcribe")],
-                    value="transcribe", interactive=False,
-                    info="Note: large-v3-turbo only supports Transcribe",
-                )
-            elif model_name in _HAKKA_MODELS_IDS:
-                return gr.update(
-                    choices=[("Transcribe", "transcribe")],
-                    value="transcribe", interactive=False,
-                    info="Hakka model only supports Transcribe",
-                )
-            else:
-                return gr.update(
-                    choices=[("Transcribe", "transcribe"), ("Translate to English", "translate")],
-                    value="transcribe", interactive=True, info=None,
-                )
-
         def on_language_change(lang):
+            """Update model choices + task choices when language selector changes."""
             if lang == "taigi":
-                model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in _TAIGI_MODELS_IDS]
-                new_model     = _TAIGI_MODELS_IDS[0]
+                model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in TAIGI_MODELS_IDS]
+                new_model     = TAIGI_MODELS_IDS[0]
                 is_hakka      = False
             elif lang == "hakka":
-                model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in _HAKKA_MODELS_IDS]
-                new_model     = _HAKKA_MODELS_IDS[0]
+                model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in HAKKA_MODELS_IDS]
+                new_model     = HAKKA_MODELS_IDS[0]
                 is_hakka      = True
             else:
-                model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in _GENERAL_MODELS_IDS]
+                model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in GENERAL_MODELS_IDS]
                 new_model     = "large-v3-turbo"
                 is_hakka      = False
 
@@ -1001,7 +962,8 @@ def create_interface() -> gr.Blocks:
         )
 
         def on_model_change(model_name):
-            is_hakka = model_name in _HAKKA_MODELS_IDS
+            """Update task choices when a specific model is chosen."""
+            is_hakka = model_name in HAKKA_MODELS_IDS
             return (
                 _task_update_for_model(model_name),
                 gr.update(visible=is_hakka),
