@@ -10,7 +10,7 @@ import shutil
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, Generator, Dict
-from threading import Lock
+from threading import Lock, Semaphore
 
 import gradio as gr
 import soundfile as sf
@@ -90,21 +90,30 @@ textarea, input, button, select {
 class TranscriberPool:
     """
     Thread-safe pool that distributes single-GPU transcribers across all
-    available GPUs, so concurrent short-audio requests use GPU 0, 1, 2 …
-    instead of queuing on GPU 0.
+    available GPUs, so concurrent requests use GPU 0, 1, 2 … instead of
+    queuing on GPU 0.
 
-    GPU assignment strategy: least-loaded first.
-    Each GPU can hold at most one resident WhisperTranscriber per model.
-    When a GPU has a cached transcriber for the requested model it is
-    preferred (avoids reloading weights); otherwise the GPU with the
-    fewest active jobs is chosen.
+    Concurrency safety
+    ------------------
+    CTranslate2's WhisperModel.generate() is NOT thread-safe.  We enforce
+    at-most-one-concurrent-inference per GPU with a per-GPU Semaphore(1).
+
+    GPU selection strategy (in priority order)
+    ------------------------------------------
+    1. Cached model + idle GPU  — best case: zero wait, no model reload.
+    2. Any completely free GPU  — load model there, start immediately.
+                                  This is what makes multi-GPU spread work.
+    3. Cached model on busy GPU — queue behind it (avoids reloading weights).
+    4. Least-loaded GPU overall — last resort, load model and queue.
+
+    The semaphore is acquired OUTSIDE self.lock to avoid deadlocks.
     """
 
     def __init__(self):
         self.lock = Lock()
 
-        # Detect GPUs available for single-GPU work.
-        # SINGLE_GPU_DEVICES env var overrides; falls back to CUDA_VISIBLE_DEVICES.
+        # Detect GPUs available for ASR work.
+        # SINGLE_GPU_DEVICES overrides CUDA_VISIBLE_DEVICES.
         _gpu_str = os.environ.get(
             "SINGLE_GPU_DEVICES",
             os.environ.get("CUDA_VISIBLE_DEVICES", ""),
@@ -116,16 +125,18 @@ class TranscriberPool:
         else:
             self.single_gpu_ids = []
 
-        print(f"Ἳ0 TranscriberPool: single-GPU slots on GPU(s) {self.single_gpu_ids}")
+        print(f"🎛️  TranscriberPool: GPU slots {self.single_gpu_ids}")
 
-        # gpu_id -> WhisperTranscriber (one resident transcriber per GPU)
+        # gpu_id -> WhisperTranscriber (one resident model per GPU)
         self.single_gpu_pool: Dict[int, WhisperTranscriber] = {}
-        # gpu_id -> number of requests currently using that GPU
+        # gpu_id -> number of requests currently queued OR running
         self.gpu_active: Dict[int, int] = {g: 0 for g in self.single_gpu_ids}
 
+        # Per-GPU binary semaphore: prevents concurrent model.generate() calls
+        self.gpu_semaphores: Dict = {g: Semaphore(1) for g in self.single_gpu_ids}
+        self.gpu_semaphores["cpu"] = Semaphore(1)
 
     def _least_loaded_gpu(self) -> int:
-        """Return the GPU id with the fewest active jobs."""
         return min(self.single_gpu_ids, key=lambda g: self.gpu_active.get(g, 0))
 
     def get_single_gpu_transcriber(
@@ -135,12 +146,15 @@ class TranscriberPool:
         min_silence_duration_s: float,
     ) -> Tuple[WhisperTranscriber, int]:
         """
-        Returns (transcriber, gpu_id).  The caller must pass gpu_id to
-        release_single_gpu_transcriber() when done.
+        Select a GPU, load model if needed, and wait until that GPU is free.
+
+        Returns (transcriber, gpu_id).  Caller MUST call
+        release_single_gpu_transcriber(gpu_id) when done, even on exception.
         """
         min_silence_duration_ms = int(min_silence_duration_s * 1000)
         device = os.environ.get("WHISPER_DEVICE", "cuda")
 
+        # ── Step 1: select GPU (under pool lock) ─────────────────────────────
         with self.lock:
             if not self.single_gpu_ids:
                 # CPU fallback
@@ -152,54 +166,118 @@ class TranscriberPool:
                         use_vad=use_vad,
                         min_silence_duration_ms=min_silence_duration_ms,
                     )
-                return self.single_gpu_pool["cpu"], "cpu"
+                gpu_id = "cpu"
+                trans = self.single_gpu_pool["cpu"]
+                self.gpu_active["cpu"] = self.gpu_active.get("cpu", 0) + 1
 
-            # Prefer a GPU that already has this model loaded and is least loaded
-            cached_gpu = None
-            cached_load = float("inf")
-            for gpu_id, trans in self.single_gpu_pool.items():
-                if trans.model_size == model_size:
-                    load = self.gpu_active.get(gpu_id, 0)
-                    if load < cached_load:
-                        cached_gpu = gpu_id
-                        cached_load = load
+            else:
+                # ── Priority 1: cached model + idle GPU ───────────────────────
+                # Probe each GPU's semaphore non-blocking; if we can grab it the
+                # GPU is idle right now.  Release immediately — we re-acquire
+                # below (outside the lock) as the real serialisation point.
+                idle_cached_gpu = None
+                for gid, t in self.single_gpu_pool.items():
+                    if t.model_size == model_size:
+                        sem = self.gpu_semaphores.get(gid)
+                        if sem is not None and sem.acquire(blocking=False):
+                            sem.release()
+                            idle_cached_gpu = gid
+                            break
 
-            if cached_gpu is not None:
-                self.gpu_active[cached_gpu] += 1
-                print(f"♛️  Reusing GPU {cached_gpu} transcriber "
-                      f"(active={self.gpu_active[cached_gpu]}, model={model_size})")
-                return self.single_gpu_pool[cached_gpu], cached_gpu
+                if idle_cached_gpu is not None:
+                    gpu_id = idle_cached_gpu
+                    trans = self.single_gpu_pool[gpu_id]
+                    self.gpu_active[gpu_id] += 1
+                    print(f"♛️  Reusing idle GPU {gpu_id} "
+                          f"(queued={self.gpu_active[gpu_id]}, model={model_size})")
 
-            # No cached model — pick least-loaded GPU and load there
-            gpu_id = self._least_loaded_gpu()
+                else:
+                    # ── Priority 2: any completely free GPU ───────────────────
+                    # Spread load: load the model on a free GPU so it can start
+                    # immediately rather than queue behind a busy GPU.
+                    free_gpu = next(
+                        (gid for gid in self.single_gpu_ids
+                         if self.gpu_active.get(gid, 0) == 0),
+                        None,
+                    )
 
-            # If this GPU already has a transcriber for a different model, replace it
-            if gpu_id in self.single_gpu_pool:
-                print(f"🔄 GPU {gpu_id}: replacing "
-                      f"{self.single_gpu_pool[gpu_id].model_size} → {model_size}")
-                del self.single_gpu_pool[gpu_id]
+                    if free_gpu is not None:
+                        gpu_id = free_gpu
+                        if gpu_id in self.single_gpu_pool:
+                            old = self.single_gpu_pool[gpu_id].model_size
+                            print(f"🔄 GPU {gpu_id}: replacing {old} → {model_size}")
+                            del self.single_gpu_pool[gpu_id]
+                        print(f"✨ Loading {model_size} on free GPU {gpu_id}")
+                        trans = WhisperTranscriber(
+                            model_size=model_size,
+                            device=device,
+                            device_index=gpu_id,
+                            compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "float16"),
+                            use_vad=use_vad,
+                            min_silence_duration_ms=min_silence_duration_ms,
+                        )
+                        self.single_gpu_pool[gpu_id] = trans
+                        self.gpu_active[gpu_id] += 1
+                        print(f"✅ GPU {gpu_id} ready (queued={self.gpu_active[gpu_id]})")
 
-            print(f"✨ Loading {model_size} on GPU {gpu_id}")
-            trans = WhisperTranscriber(
-                model_size=model_size,
-                device=device,
-                device_index=gpu_id,
-                compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "float16"),
-                use_vad=use_vad,
-                min_silence_duration_ms=min_silence_duration_ms,
-            )
-            self.single_gpu_pool[gpu_id] = trans
-            self.gpu_active[gpu_id] += 1
-            print(f"✅ GPU {gpu_id} ready (active={self.gpu_active[gpu_id]})")
-            return trans, gpu_id
+                    else:
+                        # ── Priority 3: cached model on a busy GPU ────────────
+                        busy_cached_gpu = min(
+                            (gid for gid, t in self.single_gpu_pool.items()
+                             if t.model_size == model_size),
+                            key=lambda gid: self.gpu_active.get(gid, 0),
+                            default=None,
+                        )
+
+                        if busy_cached_gpu is not None:
+                            gpu_id = busy_cached_gpu
+                            trans = self.single_gpu_pool[gpu_id]
+                            self.gpu_active[gpu_id] += 1
+                            print(f"⏳ All GPUs busy — queuing on cached GPU {gpu_id} "
+                                  f"(queued={self.gpu_active[gpu_id]}, model={model_size})")
+
+                        else:
+                            # ── Priority 4: least-loaded GPU, load model ──────
+                            gpu_id = self._least_loaded_gpu()
+                            if gpu_id in self.single_gpu_pool:
+                                old = self.single_gpu_pool[gpu_id].model_size
+                                print(f"🔄 GPU {gpu_id}: replacing {old} → {model_size}")
+                                del self.single_gpu_pool[gpu_id]
+                            print(f"✨ Loading {model_size} on least-loaded GPU {gpu_id}")
+                            trans = WhisperTranscriber(
+                                model_size=model_size,
+                                device=device,
+                                device_index=gpu_id,
+                                compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "float16"),
+                                use_vad=use_vad,
+                                min_silence_duration_ms=min_silence_duration_ms,
+                            )
+                            self.single_gpu_pool[gpu_id] = trans
+                            self.gpu_active[gpu_id] += 1
+                            print(f"✅ GPU {gpu_id} ready (queued={self.gpu_active[gpu_id]})")
+
+        # ── Step 2: wait for GPU to be free (OUTSIDE pool lock) ──────────────
+        # Only one transcription runs per GPU at a time.
+        sem = self.gpu_semaphores.get(gpu_id)
+        if sem is not None:
+            if not sem.acquire(blocking=False):
+                print(f"⏳ GPU {gpu_id} semaphore busy — waiting "
+                      f"(queued={self.gpu_active.get(gpu_id, '?')})")
+                sem.acquire()
+                print(f"▶️  GPU {gpu_id} acquired, starting transcription")
+
+        return trans, gpu_id
 
     def release_single_gpu_transcriber(self, gpu_id):
+        """Decrement active counter and release the GPU semaphore."""
         with self.lock:
             if gpu_id in self.gpu_active and self.gpu_active[gpu_id] > 0:
                 self.gpu_active[gpu_id] -= 1
-                print(f"✅ Released GPU {gpu_id} "
-                      f"(active={self.gpu_active[gpu_id]})")
+                print(f"✅ Released GPU {gpu_id} (queued={self.gpu_active[gpu_id]})")
 
+        sem = self.gpu_semaphores.get(gpu_id)
+        if sem is not None:
+            sem.release()
 
 
 # Global transcriber pool — GPU slots auto-detected from CUDA_VISIBLE_DEVICES
@@ -424,10 +502,8 @@ def process_audio(
             print(f"Warning: Could not get audio duration: {e}")
             audio_duration = 0.0
 
-        # ── Transcription ──────────────────────────────────────────────
-        # ── VAD ──────────────────────────────────────────────────
-        # Running VAD here — after enhancement — guarantees speech detection
-        # always operates on the cleaned-up audio.
+        # ── VAD ────────────────────────────────────────────────────────
+        # Run VAD after enhancement so speech detection operates on clean audio.
         vad_chunks = None
         if use_vad:
             yield prog(32, "Detecting speech segments with VAD...")
@@ -448,6 +524,7 @@ def process_audio(
 
         yield prog(35, "Loading Whisper model...")
 
+        # Blocks here until the selected GPU is free (semaphore acquired inside).
         trans, worker_id = transcriber_pool.get_single_gpu_transcriber(
             model_size, use_vad, min_silence_duration_s
         )
@@ -459,7 +536,7 @@ def process_audio(
             language=language if language != "auto" else None,
             task=task,
             progress_callback=None,
-            vad_chunks=vad_chunks,  # pre-computed from enhanced audio
+            vad_chunks=vad_chunks,
         )
 
         yield prog(85, "Transcription complete")
@@ -472,7 +549,6 @@ def process_audio(
 
         # ── Post-processing ────────────────────────────────────────────
 
-        # Save a deep copy of raw ASR segments before any mutation
         asr_segments = [seg.copy() for seg in segments]
 
         # LLM translation
@@ -495,7 +571,6 @@ def process_audio(
         elif translate_hakka and not LLM_ENABLED:
             print("⚠️  LLM translation requested but ENABLE_LLM=false — skipping")
 
-        # Traditional Chinese conversion (applied to both pipelines if active)
         if language == "zh" and convert_to_traditional:
             converter = get_converter()
             if converter.is_available():
@@ -505,7 +580,6 @@ def process_audio(
                     translated_segments = convert_segments_to_traditional(translated_segments)
                 print("✅ Converted to Traditional Chinese")
 
-        # Merge
         if merge_subtitles:
             yield prog(90, "Merging subtitle segments...")
             asr_segments = merge_segments(asr_segments, max_chars=max_chars)
@@ -590,7 +664,7 @@ def process_audio(
         yield "❌ 處理失敗，請稍後再試。", "", None, *_NO_TRANSLATION
 
     finally:
-        if worker_id:
+        if worker_id is not None:
             transcriber_pool.release_single_gpu_transcriber(worker_id)
 
         for f in temp_files:
@@ -607,7 +681,7 @@ def process_audio(
                 pass
 
 
-# ── Gradio interface ─────────────────────────────────────────────────────────────────────────────────
+# ── Gradio interface ──────────────────────────────────────────────────────────
 
 def create_interface() -> gr.Blocks:
 
@@ -666,7 +740,6 @@ def create_interface() -> gr.Blocks:
 
                 gr.Markdown("### ⚙️ Settings")
 
-                # ── Step 1: Language selector ───────────────────────────
                 GENERAL_MODELS_IDS = ["large-v3", "large-v3-turbo"]
                 HAKKA_MODELS_IDS = [
                     "formospeech/whisper-large-v2-taiwanese-hakka-v1",
@@ -702,9 +775,6 @@ def create_interface() -> gr.Blocks:
                     label="Language",
                 )
 
-                # ── Step 2: Model selector ──────────────────────────────
-                # Initial choices are filtered by the initial language.
-                # on_language_change updates both choices and value together.
                 if init_lang_sel == "taigi":
                     init_model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in TAIGI_MODELS_IDS]
                 elif init_lang_sel == "hakka":
@@ -718,7 +788,6 @@ def create_interface() -> gr.Blocks:
                     label="Model",
                 )
 
-                # Compute initial task choices strictly based on initial model
                 if init_model_value in TAIGI_MODELS_IDS:
                     init_task_choices     = [("Translate to Mandarin", "translate_mandarin")]
                     init_task_value       = "translate_mandarin"
@@ -749,7 +818,6 @@ def create_interface() -> gr.Blocks:
                         info=init_task_info,
                     )
 
-                # Speech Enhancement controls
                 with gr.Column(visible=True) as enhancement_col:
                     use_enhancement_checkbox = gr.Checkbox(
                         value=False,
@@ -780,7 +848,6 @@ def create_interface() -> gr.Blocks:
                     label="Max Characters Per Line",
                 )
 
-                # LLM controls — wrapped in Column to avoid Gradio hidden-element event bugs
                 with gr.Column(visible=False) as llm_col:
                     translate_hakka_checkbox = gr.Checkbox(
                         value=True,
@@ -808,7 +875,6 @@ def create_interface() -> gr.Blocks:
 
                 status_text = gr.HTML("Waiting for input...")
 
-                # ── ASR output (always visible) ─────────────────────────
                 gr.Markdown("#### 🗣️ ASR Result")
                 asr_srt_output = gr.Textbox(
                     label="SRT Subtitle Content (ASR)",
@@ -820,7 +886,6 @@ def create_interface() -> gr.Blocks:
                     asr_copy_status = gr.HTML("", elem_classes="copy-success")
                 asr_srt_file = gr.File(label="Download ASR SRT")
 
-                # ── Translation output (visible only after LLM translation) ──
                 with gr.Column(visible=False) as translated_col:
                     gr.Markdown("#### 🌐 Translation Result (Mandarin)")
                     translated_srt_output = gr.Textbox(
@@ -873,9 +938,7 @@ def create_interface() -> gr.Blocks:
             "PRIVATE_TAIGI_MODEL",
         ]
 
-        # ── Per-model task choices (single source of truth) ────────────
         def _task_update_for_model(model_name):
-            """Return a gr.update dict for task_radio based on the given model."""
             if model_name in _TAIGI_MODELS_IDS:
                 return gr.update(
                     choices=[("Translate to Mandarin", "translate_mandarin")],
@@ -895,14 +958,12 @@ def create_interface() -> gr.Blocks:
                     info="Hakka model only supports Transcribe",
                 )
             else:
-                # large-v3
                 return gr.update(
                     choices=[("Transcribe", "transcribe"), ("Translate to English", "translate")],
                     value="transcribe", interactive=True, info=None,
                 )
 
         def on_language_change(lang):
-            """Update model choices + task choices when language selector changes."""
             if lang == "taigi":
                 model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in _TAIGI_MODELS_IDS]
                 new_model     = _TAIGI_MODELS_IDS[0]
@@ -911,18 +972,18 @@ def create_interface() -> gr.Blocks:
                 model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in _HAKKA_MODELS_IDS]
                 new_model     = _HAKKA_MODELS_IDS[0]
                 is_hakka      = True
-            else:  # auto / zh / en
+            else:
                 model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in _GENERAL_MODELS_IDS]
                 new_model     = "large-v3-turbo"
                 is_hakka      = False
 
             return (
-                gr.update(choices=model_choices, value=new_model),  # model_dropdown
-                _task_update_for_model(new_model),                  # task_radio
-                gr.update(visible=is_hakka),                        # llm_col
-                gr.update(value=is_hakka),                          # translate_hakka_checkbox
-                gr.update(visible=is_hakka),                        # llm_prompt_textbox
-                gr.update(visible=False),                           # translated_col
+                gr.update(choices=model_choices, value=new_model),
+                _task_update_for_model(new_model),
+                gr.update(visible=is_hakka),
+                gr.update(value=is_hakka),
+                gr.update(visible=is_hakka),
+                gr.update(visible=False),
             )
 
         language_selector.change(
@@ -940,14 +1001,13 @@ def create_interface() -> gr.Blocks:
         )
 
         def on_model_change(model_name):
-            """Update task choices when a specific model is chosen."""
             is_hakka = model_name in _HAKKA_MODELS_IDS
             return (
-                _task_update_for_model(model_name),    # task_radio
-                gr.update(visible=is_hakka),           # llm_col
-                gr.update(value=is_hakka),             # translate_hakka_checkbox
-                gr.update(visible=is_hakka),           # llm_prompt_textbox
-                gr.update(visible=False),              # translated_col
+                _task_update_for_model(model_name),
+                gr.update(visible=is_hakka),
+                gr.update(value=is_hakka),
+                gr.update(visible=is_hakka),
+                gr.update(visible=False),
             )
 
         model_dropdown.change(
@@ -997,7 +1057,6 @@ def create_interface() -> gr.Blocks:
             queue=False,
         )
 
-        # Copy buttons
         _COPY_JS = """(content) => {
             if (!content) return "⚠️ No content to copy";
             navigator.clipboard.writeText(content).then(
@@ -1014,10 +1073,8 @@ def create_interface() -> gr.Blocks:
             fn=None, inputs=[translated_srt_output], outputs=[trans_copy_status], js=_COPY_JS,
         )
 
-        # ── Examples ────────────────────────────────────────────────────
         gr.Markdown("### 📋 Examples")
 
-        # Ground truth textbox — read-only, populated when an example is clicked
         ground_truth_textbox = gr.Textbox(
             label="Ground Truth",
             interactive=False,
@@ -1047,7 +1104,6 @@ def create_interface() -> gr.Blocks:
                 language_selector,
                 ground_truth_textbox,
             ],
-            # label="客語辨識範例",
         )
 
     return app
@@ -1089,9 +1145,7 @@ def main():
         transcriber_pool.release_single_gpu_transcriber(gpu_id)
         print("✅ Model pre-loaded")
 
-    # ── Load credentials ───────────────────────────────────────────────
     def _load_users() -> dict:
-        """Parse .users into {username: password}. Ignores blank lines and comments."""
         candidates = [
             os.path.join(os.path.dirname(os.path.abspath(__file__)), ".users"),
             "/app/.users",
@@ -1123,11 +1177,9 @@ def main():
     else:
         print("No credentials configured - running without authentication")
 
-    # ── Build Gradio app and add PDF route ─────────────────────────────
     gradio_app = create_interface()
     gradio_app.queue(max_size=10, default_concurrency_limit=2, api_open=False)
 
-    # Launch using Gradio's native launch() — most reliable auth support
     gradio_app.launch(
         server_name=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
         server_port=int(os.environ.get("GRADIO_SERVER_PORT", 7860)),
