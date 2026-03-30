@@ -18,6 +18,9 @@ soundfile>=0.12.1
 numpy>=1.24.0
 scipy>=1.10.0  # For audio resampling
 
+# Spectrogram generation (Enhance-Only mode)
+matplotlib>=3.7.0
+
 # Speech Enhancement — DeepFilterNet3
 deepfilternet  # DeepFilterNet3 noise suppression
 
