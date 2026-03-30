@@ -41,8 +41,11 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
     && pip show faster-whisper | grep Version
 
-# Download Silero VAD model during build
-RUN python -c "import torch; torch.hub.load('snakers4/silero-vad', 'silero_vad', force_reload=True)"
+# Download Silero VAD model during build.
+# trust_repo=True suppresses the interactive trust prompt that PyTorch >=2.x
+# would otherwise show in non-TTY environments — without it Docker build fails
+# with EOFError because there is no stdin to read the y/N answer from.
+RUN python -c "import torch; torch.hub.load('snakers4/silero-vad', 'silero_vad', force_reload=True, trust_repo=True)"
 
 # Download DeepFilterNet3 model into the image (DF_PRETRAINED_MODELS_PATH=/app/models)
 # Model files (~30 MB) are baked in so runtime never needs network access for this.
