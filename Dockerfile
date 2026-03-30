@@ -8,6 +8,13 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # DeepFilterNet3 model baked into the image at a fixed path
 ENV DF_PRETRAINED_MODELS_PATH=/app/models
 
+# DPDFNet TFLite models — stored alongside DF3 under /app/models/dpdfnet
+ENV DPDFNET_MODELS_DIR=/app/models/dpdfnet
+
+# Which DPDFNet models to bake in (comma-separated; see preload_dpdfnet.py)
+# Default: all four 16 kHz variants.  Set to "" to skip DPDFNet download.
+ENV DPDFNET_DOWNLOAD_MODELS=baseline,dpdfnet2,dpdfnet4,dpdfnet8
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3.11 \
@@ -41,6 +48,15 @@ RUN python -c "import torch; torch.hub.load('snakers4/silero-vad', 'silero_vad',
 # Model files (~30 MB) are baked in so runtime never needs network access for this.
 COPY preload_deepfilter.py /tmp/preload_deepfilter.py
 RUN python /tmp/preload_deepfilter.py
+
+# Download DPDFNet TFLite models into the image
+# (~10–17 MB each depending on variant; set DPDFNET_DOWNLOAD_MODELS="" to skip)
+COPY preload_dpdfnet.py /tmp/preload_dpdfnet.py
+RUN if [ -n "$DPDFNET_DOWNLOAD_MODELS" ]; then \
+        python /tmp/preload_dpdfnet.py; \
+    else \
+        echo "ℹ️  DPDFNET_DOWNLOAD_MODELS is empty — skipping DPDFNet download"; \
+    fi
 
 # Copy application code
 COPY . .

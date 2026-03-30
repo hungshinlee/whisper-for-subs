@@ -1,5 +1,11 @@
 """
 Gradio-based web interface for Whisper ASR service.
+
+Supports two modes (selectable via the Mode radio at the top of Settings):
+
+  🎙️ ASR (Transcribe)  — full pipeline: enhance → VAD → Whisper → SRT
+  🔊 Enhance Only      — speech enhancement only; outputs enhanced WAV
+                          + a time-aligned spectrogram image
 """
 
 import os
@@ -43,17 +49,26 @@ from hakka_translator import (
 _HAKKA_LEXICON = load_lexicon()
 import numpy as np
 from vad import SileroVAD
-from speech_enhancer import is_deepfilter_available, enhance_file
+from speech_enhancer import (
+    DEEPFILTERNET3,
+    available_enhancement_models,
+    enhance_file,
+    is_model_available,
+)
 
-SPEECH_ENHANCEMENT_AVAILABLE = is_deepfilter_available()
+# ── Enhancement model registry ────────────────────────────────────────────────
+ENHANCEMENT_MODEL_CHOICES: list = available_enhancement_models()
+SPEECH_ENHANCEMENT_AVAILABLE: bool = len(ENHANCEMENT_MODEL_CHOICES) > 0
 
-# Whether LLM translation is available in this deployment
+_DEFAULT_ENHANCEMENT_MODEL: str = (
+    DEEPFILTERNET3
+    if is_model_available(DEEPFILTERNET3)
+    else (ENHANCEMENT_MODEL_CHOICES[0][1] if ENHANCEMENT_MODEL_CHOICES else DEEPFILTERNET3)
+)
+
 LLM_ENABLED = is_llm_enabled()
 
-# ── Model ID lists — derived from MODEL_CONFIGS (single source of truth) ─────
-# MODEL_CONFIGS only adds an entry when the corresponding env var is set, so
-# these lists are empty when a language-specific model is not configured.
-# All UI code must use these constants rather than hardcoding model IDs.
+# ── Whisper model ID lists ────────────────────────────────────────────────────
 GENERAL_MODELS_IDS: list = [
     m for m, cfg in MODEL_CONFIGS.items() if cfg["label"] == "General"
 ]
@@ -64,42 +79,28 @@ TAIGI_MODELS_IDS: list = [
     m for m, cfg in MODEL_CONFIGS.items() if cfg["label"] == "Taigi"
 ]
 
+# ── Operating modes ───────────────────────────────────────────────────────────
+MODE_ASR          = "asr"
+MODE_ENHANCE_ONLY = "enhance_only"
+
 
 # Custom CSS with Roboto font
 CUSTOM_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
 
-* {
-    font-family: 'Roboto', sans-serif !important;
-}
-
-.gradio-container {
-    font-family: 'Roboto', sans-serif !important;
-}
-
-.prose {
-    font-family: 'Roboto', sans-serif !important;
-}
-
-textarea, input, button, select {
-    font-family: 'Roboto', sans-serif !important;
-}
-
-.progress-bar-container {
-    margin: 10px 0;
-}
-
-.copy-button {
-    margin-top: 10px;
-}
-
-.copy-success {
-    color: #4CAF50;
-    font-weight: 500;
-    margin-top: 5px;
-}
+* { font-family: 'Roboto', sans-serif !important; }
+.gradio-container { font-family: 'Roboto', sans-serif !important; }
+.prose { font-family: 'Roboto', sans-serif !important; }
+textarea, input, button, select { font-family: 'Roboto', sans-serif !important; }
+.progress-bar-container { margin: 10px 0; }
+.copy-button { margin-top: 10px; }
+.copy-success { color: #4CAF50; font-weight: 500; margin-top: 5px; }
 """
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TranscriberPool
+# ═════════════════════════════════════════════════════════════════════════════
 
 class TranscriberPool:
     """
@@ -107,16 +108,10 @@ class TranscriberPool:
     available GPUs, so concurrent requests use GPU 0, 1, 2 … instead of
     queuing on GPU 0.
 
-    Concurrency safety
-    ------------------
-    CTranslate2's WhisperModel.generate() is NOT thread-safe.  We enforce
-    at-most-one-concurrent-inference per GPU with a per-GPU Semaphore(1).
-
     GPU selection strategy (in priority order)
     ------------------------------------------
     1. Cached model + idle GPU  — best case: zero wait, no model reload.
     2. Any completely free GPU  — load model there, start immediately.
-                                  This is what makes multi-GPU spread work.
     3. Cached model on busy GPU — queue behind it (avoids reloading weights).
     4. Least-loaded GPU overall — last resort, load model and queue.
 
@@ -126,8 +121,6 @@ class TranscriberPool:
     def __init__(self):
         self.lock = Lock()
 
-        # Detect GPUs available for ASR work.
-        # SINGLE_GPU_DEVICES overrides CUDA_VISIBLE_DEVICES.
         _gpu_str = os.environ.get(
             "SINGLE_GPU_DEVICES",
             os.environ.get("CUDA_VISIBLE_DEVICES", ""),
@@ -141,12 +134,8 @@ class TranscriberPool:
 
         print(f"🎛️  TranscriberPool: GPU slots {self.single_gpu_ids}")
 
-        # gpu_id -> WhisperTranscriber (one resident model per GPU)
         self.single_gpu_pool: Dict[int, WhisperTranscriber] = {}
-        # gpu_id -> number of requests currently queued OR running
         self.gpu_active: Dict[int, int] = {g: 0 for g in self.single_gpu_ids}
-
-        # Per-GPU binary semaphore: prevents concurrent model.generate() calls
         self.gpu_semaphores: Dict = {g: Semaphore(1) for g in self.single_gpu_ids}
         self.gpu_semaphores["cpu"] = Semaphore(1)
 
@@ -159,19 +148,11 @@ class TranscriberPool:
         use_vad: bool,
         min_silence_duration_s: float,
     ) -> Tuple[WhisperTranscriber, int]:
-        """
-        Select a GPU, load model if needed, and wait until that GPU is free.
-
-        Returns (transcriber, gpu_id).  Caller MUST call
-        release_single_gpu_transcriber(gpu_id) when done, even on exception.
-        """
         min_silence_duration_ms = int(min_silence_duration_s * 1000)
         device = os.environ.get("WHISPER_DEVICE", "cuda")
 
-        # ── Step 1: select GPU (under pool lock) ─────────────────────────────
         with self.lock:
             if not self.single_gpu_ids:
-                # CPU fallback
                 if "cpu" not in self.single_gpu_pool:
                     self.single_gpu_pool["cpu"] = WhisperTranscriber(
                         model_size=model_size,
@@ -183,9 +164,8 @@ class TranscriberPool:
                 gpu_id = "cpu"
                 trans = self.single_gpu_pool["cpu"]
                 self.gpu_active["cpu"] = self.gpu_active.get("cpu", 0) + 1
-
             else:
-                # ── Priority 1: cached model + idle GPU ───────────────────────
+                # Priority 1: cached model + idle GPU
                 idle_cached_gpu = None
                 for gid, t in self.single_gpu_pool.items():
                     if t.model_size == model_size:
@@ -201,15 +181,13 @@ class TranscriberPool:
                     self.gpu_active[gpu_id] += 1
                     print(f"♛️  Reusing idle GPU {gpu_id} "
                           f"(queued={self.gpu_active[gpu_id]}, model={model_size})")
-
                 else:
-                    # ── Priority 2: any completely free GPU ───────────────────
+                    # Priority 2: any completely free GPU
                     free_gpu = next(
                         (gid for gid in self.single_gpu_ids
                          if self.gpu_active.get(gid, 0) == 0),
                         None,
                     )
-
                     if free_gpu is not None:
                         gpu_id = free_gpu
                         if gpu_id in self.single_gpu_pool:
@@ -228,25 +206,22 @@ class TranscriberPool:
                         self.single_gpu_pool[gpu_id] = trans
                         self.gpu_active[gpu_id] += 1
                         print(f"✅ GPU {gpu_id} ready (queued={self.gpu_active[gpu_id]})")
-
                     else:
-                        # ── Priority 3: cached model on a busy GPU ────────────
+                        # Priority 3: cached model on a busy GPU
                         busy_cached_gpu = min(
                             (gid for gid, t in self.single_gpu_pool.items()
                              if t.model_size == model_size),
                             key=lambda gid: self.gpu_active.get(gid, 0),
                             default=None,
                         )
-
                         if busy_cached_gpu is not None:
                             gpu_id = busy_cached_gpu
                             trans = self.single_gpu_pool[gpu_id]
                             self.gpu_active[gpu_id] += 1
-                            print(f"⏳ All GPUs busy — queuing on cached GPU {gpu_id} "
+                            print(f"⏳ Queuing on cached GPU {gpu_id} "
                                   f"(queued={self.gpu_active[gpu_id]}, model={model_size})")
-
                         else:
-                            # ── Priority 4: least-loaded GPU, load model ──────
+                            # Priority 4: least-loaded GPU
                             gpu_id = self._least_loaded_gpu()
                             if gpu_id in self.single_gpu_pool:
                                 old = self.single_gpu_pool[gpu_id].model_size
@@ -265,7 +240,6 @@ class TranscriberPool:
                             self.gpu_active[gpu_id] += 1
                             print(f"✅ GPU {gpu_id} ready (queued={self.gpu_active[gpu_id]})")
 
-        # ── Step 2: wait for GPU to be free (OUTSIDE pool lock) ──────────────
         sem = self.gpu_semaphores.get(gpu_id)
         if sem is not None:
             if not sem.acquire(blocking=False):
@@ -277,55 +251,41 @@ class TranscriberPool:
         return trans, gpu_id
 
     def release_single_gpu_transcriber(self, gpu_id):
-        """Decrement active counter and release the GPU semaphore."""
         with self.lock:
             if gpu_id in self.gpu_active and self.gpu_active[gpu_id] > 0:
                 self.gpu_active[gpu_id] -= 1
                 print(f"✅ Released GPU {gpu_id} (queued={self.gpu_active[gpu_id]})")
-
         sem = self.gpu_semaphores.get(gpu_id)
         if sem is not None:
             sem.release()
 
 
-# Global transcriber pool — GPU slots auto-detected from CUDA_VISIBLE_DEVICES
 transcriber_pool = TranscriberPool()
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# Helpers
+# ═════════════════════════════════════════════════════════════════════════════
+
 def cleanup_old_files(max_age_hours: int = 24):
     now = datetime.now()
-
-    tmp_dir = "/tmp/whisper-downloads"
-    if os.path.exists(tmp_dir):
+    for tmp_dir in ["/tmp/whisper-downloads", "/tmp/whisper-sessions"]:
+        if not os.path.exists(tmp_dir):
+            continue
         for f in glob.glob(os.path.join(tmp_dir, "*")):
             try:
-                mtime = datetime.fromtimestamp(os.path.getmtime(f))
-                if now - mtime > timedelta(hours=max_age_hours):
-                    if os.path.isfile(f):
-                        os.unlink(f)
-                    elif os.path.isdir(f):
-                        shutil.rmtree(f)
+                if now - datetime.fromtimestamp(os.path.getmtime(f)) > timedelta(hours=max_age_hours):
+                    (os.unlink if os.path.isfile(f) else shutil.rmtree)(f)
             except Exception:
                 pass
-
     output_dir = "/app/outputs"
     if os.path.exists(output_dir):
-        for f in glob.glob(os.path.join(output_dir, "*.srt")):
+        for f in glob.glob(os.path.join(output_dir, "*.srt")) + \
+                 glob.glob(os.path.join(output_dir, "*.wav")) + \
+                 glob.glob(os.path.join(output_dir, "*.png")):
             try:
-                mtime = datetime.fromtimestamp(os.path.getmtime(f))
-                if now - mtime > timedelta(hours=max_age_hours):
+                if now - datetime.fromtimestamp(os.path.getmtime(f)) > timedelta(hours=max_age_hours):
                     os.unlink(f)
-            except Exception:
-                pass
-
-    sessions_dir = "/tmp/whisper-sessions"
-    if os.path.exists(sessions_dir):
-        for session_dir in glob.glob(os.path.join(sessions_dir, "*")):
-            try:
-                if os.path.isdir(session_dir):
-                    mtime = datetime.fromtimestamp(os.path.getmtime(session_dir))
-                    if now - mtime > timedelta(hours=max_age_hours):
-                        shutil.rmtree(session_dir)
             except Exception:
                 pass
 
@@ -333,25 +293,22 @@ def cleanup_old_files(max_age_hours: int = 24):
 def format_progress_html(percent: int, message: str) -> str:
     return f"""
 <div class="progress-bar-container">
-    <div style="margin-bottom: 5px; font-weight: 500;">{message}</div>
-    <div style="background-color: #e0e0e0; border-radius: 10px; height: 20px; overflow: hidden;">
-        <div style="background: linear-gradient(90deg, #2196F3, #21CBF3); height: 100%; width: {percent}%; transition: width 0.3s ease; border-radius: 10px;"></div>
+    <div style="margin-bottom:5px;font-weight:500;">{message}</div>
+    <div style="background-color:#e0e0e0;border-radius:10px;height:20px;overflow:hidden;">
+        <div style="background:linear-gradient(90deg,#2196F3,#21CBF3);height:100%;width:{percent}%;
+                    transition:width 0.3s ease;border-radius:10px;"></div>
     </div>
-    <div style="text-align: right; font-size: 12px; color: #666; margin-top: 3px;">{percent}%</div>
-</div>
-"""
+    <div style="text-align:right;font-size:12px;color:#666;margin-top:3px;">{percent}%</div>
+</div>"""
 
 
-# Formats that soundfile cannot decode — must be converted to WAV first.
 _SF_UNSUPPORTED_EXTS = {'.mp3', '.aac', '.m4a', '.m4b', '.opus', '.wma', '.amr', '.3gp', '.3gpp'}
 
 
 def _ensure_wav(src_path: str, session_dir: str) -> str:
-    """Convert non-WAV formats to WAV via ffmpeg; return src_path unchanged if already WAV."""
     ext = os.path.splitext(src_path)[1].lower()
     if ext not in _SF_UNSUPPORTED_EXTS:
         return src_path
-
     wav_path = os.path.join(session_dir, f"converted_{uuid.uuid4().hex[:8]}.wav")
     print(f"🔄 Converting {ext} → WAV: {wav_path}")
     import subprocess
@@ -364,21 +321,353 @@ def _ensure_wav(src_path: str, session_dir: str) -> str:
 
 
 def _save_srt(srt_content: str, safe_title: str, suffix: str, output_dir: str) -> str:
-    """Write SRT content to a file and return the path."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     unique_id = uuid.uuid4().hex[:6]
-    filename = f"{safe_title}_{suffix}_{timestamp}_{unique_id}.srt"
-    path = os.path.join(output_dir, filename)
+    path = os.path.join(output_dir, f"{safe_title}_{suffix}_{timestamp}_{unique_id}.srt")
     with open(path, "w", encoding="utf-8") as f:
         f.write(srt_content)
     return path
 
 
-# Yield helper: 6-tuple used throughout process_audio
-_NO_TRANSLATION = (gr.update(visible=False), "", None)
+def _safe_title(video_title: str) -> str:
+    return "".join(c for c in video_title if c.isalnum() or c in " -_").strip()[:40]
 
 
-def process_audio(
+def _get_output_dir() -> str:
+    out = "/app/outputs" if os.path.exists("/app/outputs") else tempfile.gettempdir()
+    os.makedirs(out, exist_ok=True)
+    return out
+
+
+def _generate_spectrogram_png(
+    audio: np.ndarray,
+    sr: int,
+    output_path: str,
+    title: str = "Spectrogram",
+) -> str:
+    """
+    Compute STFT, render a mel-style log-power spectrogram with a time axis
+    in seconds (matching the audio player timeline), and save to output_path.
+
+    Returns output_path.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from scipy import signal as scipy_signal
+
+    # STFT — 25 ms window, 10 ms hop → good time resolution for speech
+    nperseg  = int(sr * 0.025)
+    noverlap = int(sr * 0.015)
+
+    freqs, times, Zxx = scipy_signal.stft(
+        audio, fs=sr, nperseg=nperseg, noverlap=noverlap
+    )
+    power_db = 20 * np.log10(np.maximum(np.abs(Zxx), 1e-10))
+
+    # Cap frequency axis at 8 kHz for speech (keeps the plot readable)
+    freq_limit_hz = min(8000, freqs[-1])
+    freq_mask     = freqs <= freq_limit_hz
+    freqs_plot    = freqs[freq_mask]
+    power_plot    = power_db[freq_mask, :]
+
+    vmax = power_plot.max()
+    vmin = vmax - 80  # 80 dB dynamic range
+
+    # Figure: wide enough so the time axis is easy to read
+    duration_s  = len(audio) / sr
+    fig_width   = max(10, min(20, duration_s * 0.6))
+    fig, ax = plt.subplots(figsize=(fig_width, 3.5), dpi=120)
+
+    pcm = ax.pcolormesh(
+        times,
+        freqs_plot / 1000,   # Hz → kHz
+        power_plot,
+        cmap="inferno",
+        shading="gouraud",
+        vmin=vmin,
+        vmax=vmax,
+    )
+
+    ax.set_xlabel("Time (s)", fontsize=10)
+    ax.set_ylabel("Frequency (kHz)", fontsize=10)
+    ax.set_title(title, fontsize=11)
+    ax.set_xlim(0, times[-1])
+    ax.set_ylim(0, freq_limit_hz / 1000)
+
+    cbar = fig.colorbar(pcm, ax=ax, pad=0.01)
+    cbar.set_label("dB", fontsize=9)
+    cbar.ax.tick_params(labelsize=8)
+
+    ax.tick_params(labelsize=9)
+    fig.tight_layout()
+    plt.savefig(output_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    print(f"📊 Spectrogram saved: {output_path}")
+    return output_path
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Shared yield-tuple layout (9 values)
+#
+#  0  status_html          str / HTML
+#  1  asr_srt_text         str
+#  2  asr_srt_file         str | None   (file path)
+#  3  translated_col       gr.update    (visible)
+#  4  translated_srt_text  str
+#  5  translated_srt_file  str | None
+#  6  enhance_only_col     gr.update    (visible)
+#  7  enhanced_audio       str | None   (WAV file path for gr.Audio)
+#  8  spectrogram_image    str | None   (PNG file path for gr.Image)
+# ═════════════════════════════════════════════════════════════════════════════
+
+_NO_TRANSLATE = (gr.update(visible=False), "", None)
+_NO_ENHANCE   = (gr.update(visible=False), None, None)
+
+
+def _prog_asr(pct, msg):
+    """Yield-tuple for ASR mode progress (enhance_only_col stays hidden)."""
+    return format_progress_html(pct, msg), "", None, *_NO_TRANSLATE, *_NO_ENHANCE
+
+
+def _prog_enh(pct, msg):
+    """Yield-tuple for enhance-only mode progress (ASR outputs stay empty)."""
+    return format_progress_html(pct, msg), "", None, *_NO_TRANSLATE, *_NO_ENHANCE
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Input preparation — shared by both modes
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _prepare_input(
+    audio_file: Optional[str],
+    youtube_url: str,
+    session_dir: str,
+    prog_fn,
+) -> Generator:
+    """
+    Shared generator that resolves the audio source to a local WAV path.
+
+    Yields progress tuples via prog_fn(pct, msg).
+    On success, the final yield is a 3-tuple: (audio_path, video_title, temp_files).
+    On failure, yields an error string and returns.
+    """
+    temp_files = []
+    audio_path = None
+    video_title = "output"
+
+    if youtube_url and youtube_url.strip():
+        if not is_youtube_url(youtube_url):
+            yield "❌ Invalid YouTube URL", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
+            return
+
+        yield prog_fn(5, "Fetching video information...")
+        info = get_video_info(youtube_url)
+        if info:
+            video_title = info.get("title", "youtube_audio")
+            yield prog_fn(10, f"Downloading: {video_title[:40]}...")
+
+        download_dir = os.path.join(session_dir, "downloads")
+        os.makedirs(download_dir, exist_ok=True)
+
+        audio_path, title = download_audio_with_progress(
+            youtube_url, output_dir=download_dir, progress_callback=None,
+        )
+        yield prog_fn(30, "Download complete")
+
+        if audio_path is None:
+            yield "❌ Download failed. Please check the URL.", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
+            return
+
+        if title:
+            video_title = title
+        temp_files.append(audio_path)
+
+    elif audio_file:
+        ext = os.path.splitext(audio_file)[1]
+        upload_copy = os.path.join(session_dir, f"upload_{uuid.uuid4().hex[:8]}{ext}")
+        shutil.copy2(audio_file, upload_copy)
+        temp_files.append(upload_copy)
+        video_title = os.path.splitext(os.path.basename(audio_file))[0]
+        audio_path = _ensure_wav(upload_copy, session_dir)
+        if audio_path != upload_copy:
+            temp_files.append(audio_path)
+        yield prog_fn(10, "Audio file loaded")
+        print(f"📁 Session audio: {audio_path}")
+
+    else:
+        yield "❌ Please upload an audio file or enter a YouTube URL", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
+        return
+
+    yield (audio_path, video_title, temp_files)   # sentinel — not a display tuple
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Enhance-Only pipeline
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _run_enhance_only(
+    audio_file: Optional[str],
+    youtube_url: str,
+    enhancement_model: str,
+    enhancement_mix: float,
+) -> Generator:
+    session_id  = uuid.uuid4().hex[:12]
+    session_dir = os.path.join("/tmp/whisper-sessions", session_id)
+    os.makedirs(session_dir, exist_ok=True)
+    temp_files  = []
+
+    print(f"\n{'=' * 60}")
+    print(f"🔊 Enhance-Only session: {session_id}")
+    print(f"{'=' * 60}\n")
+
+    start_time = time.time()
+
+    try:
+        # ── Input ────────────────────────────────────────────────────────
+        result = None
+        for item in _prepare_input(audio_file, youtube_url, session_dir, _prog_enh):
+            if isinstance(item, tuple) and len(item) == 3 and isinstance(item[0], str) \
+                    and not item[0].startswith("❌"):
+                # sentinel: (audio_path, video_title, prep_temp_files)
+                if os.path.isfile(item[0]):
+                    result = item
+                    temp_files.extend(item[2])
+                    break
+            yield item  # progress or error tuple
+
+        if result is None:
+            return
+
+        audio_path, video_title, _ = result
+
+        # ── Check model ──────────────────────────────────────────────────
+        if not is_model_available(enhancement_model):
+            yield (
+                f"❌ Enhancement model '{enhancement_model}' is not available.",
+                "", None, *_NO_TRANSLATE, *_NO_ENHANCE,
+            )
+            return
+
+        model_label = next(
+            (lbl for lbl, val in ENHANCEMENT_MODEL_CHOICES if val == enhancement_model),
+            enhancement_model,
+        )
+
+        # ── Load audio for spectrogram ───────────────────────────────────
+        raw_audio, file_sr = sf.read(audio_path, dtype="float32")
+        if raw_audio.ndim == 2:
+            raw_audio = raw_audio.mean(axis=1)
+        audio_duration = len(raw_audio) / file_sr
+        print(f"⏱️  Audio duration: {audio_duration:.1f}s")
+
+        # ── Enhance ──────────────────────────────────────────────────────
+        yield _prog_enh(30, f"Enhancing speech ({model_label}, mix={enhancement_mix:.2f})…")
+
+        output_dir   = _get_output_dir()
+        safe          = _safe_title(video_title)
+        timestamp     = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id     = uuid.uuid4().hex[:6]
+
+        enhanced_wav  = os.path.join(
+            output_dir, f"{safe}_enhanced_{timestamp}_{unique_id}.wav"
+        )
+        spectrogram_png = os.path.join(
+            output_dir, f"{safe}_spectrogram_{timestamp}_{unique_id}.png"
+        )
+
+        enhance_file(
+            audio_path,
+            enhanced_wav,
+            mix_factor=enhancement_mix,
+            model_name=enhancement_model,
+        )
+        print(f"💾 Enhanced audio saved: {enhanced_wav}")
+
+        # ── Spectrogram ──────────────────────────────────────────────────
+        yield _prog_enh(80, "Generating spectrogram…")
+
+        enhanced_audio_np, enhanced_sr = sf.read(enhanced_wav, dtype="float32")
+        if enhanced_audio_np.ndim == 2:
+            enhanced_audio_np = enhanced_audio_np.mean(axis=1)
+
+        _generate_spectrogram_png(
+            enhanced_audio_np,
+            enhanced_sr,
+            spectrogram_png,
+            title=f"Enhanced Spectrogram — {model_label}",
+        )
+
+        # ── Done ─────────────────────────────────────────────────────────
+        elapsed = time.time() - start_time
+
+        badge_style = (
+            "display:inline-flex;align-items:center;gap:6px;"
+            "background:#f0f7ff;border:1px solid #c7dff7;border-radius:8px;"
+            "padding:6px 12px;margin:4px;font-size:14px;"
+        )
+        label_s = "color:#555;font-weight:400;"
+        value_s = "color:#1565c0;font-weight:600;"
+
+        def badge(icon, label, value):
+            return (
+                f'<span style="{badge_style}">'
+                f'{icon} <span style="{label_s}">{label}:</span>'
+                f'<span style="{value_s}">{value}</span>'
+                f'</span>'
+            )
+
+        badges = "".join([
+            badge("⏱️", "Audio",      f"{audio_duration:.1f}s"),
+            badge("⚡", "Processing", f"{elapsed:.1f}s"),
+            badge("🔊", "Model",      model_label),
+            badge("🎚️", "Mix",        f"{enhancement_mix:.2f}"),
+        ])
+        status_html = (
+            '<div style="margin-bottom:6px;font-weight:600;color:#2e7d32;font-size:15px">'
+            '✅ Enhancement complete</div>'
+            f'<div style="display:flex;flex-wrap:wrap;gap:2px">{badges}</div>'
+        )
+
+        print(f"\n{'=' * 60}")
+        print(f"✅ Enhance-Only session done: {session_id}  ({elapsed:.1f}s)")
+        print(f"{'=' * 60}\n")
+
+        yield (
+            status_html,
+            "", None,                       # asr_srt_text, asr_srt_file
+            gr.update(visible=False),        # translated_col
+            "", None,                        # translated texts/files
+            gr.update(visible=True),         # enhance_only_col  ← show
+            enhanced_wav,                    # gr.Audio path
+            spectrogram_png,                 # gr.Image path
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"\n❌ Enhance-Only session failed: {session_id}\nError: {e}\n")
+        yield "❌ 增強失敗，請稍後再試。", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
+
+    finally:
+        for f in temp_files:
+            if f and os.path.exists(f):
+                try:
+                    os.unlink(f)
+                except Exception:
+                    pass
+        if os.path.exists(session_dir):
+            try:
+                shutil.rmtree(session_dir)
+            except Exception:
+                pass
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ASR pipeline  (original process_audio, adapted to 9-tuple yields)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _run_asr(
     audio_file: Optional[str],
     youtube_url: str,
     model_size: str,
@@ -389,19 +678,13 @@ def process_audio(
     merge_subtitles: bool,
     convert_to_traditional: bool,
     max_chars: int,
-    translate_hakka: bool = False,
-    llm_system_prompt: str = "",
-    use_lexicon: bool = False,
-    use_enhancement: bool = False,
-    enhancement_mix: float = 1.0,
+    translate_hakka: bool,
+    llm_system_prompt: str,
+    use_lexicon: bool,
+    use_enhancement: bool,
+    enhancement_model: str,
+    enhancement_mix: float,
 ) -> Generator:
-    """
-    Process audio from file or YouTube URL.
-
-    Yields 6-tuples:
-        (status_html, asr_srt_text, asr_srt_file,
-         translated_col_update, translated_srt_text, translated_srt_file)
-    """
     if language == "taigi":
         language = "zh"
         task = "transcribe"
@@ -410,97 +693,73 @@ def process_audio(
     if task == "translate_mandarin":
         task = "transcribe"
 
-    session_id = uuid.uuid4().hex[:12]
+    session_id  = uuid.uuid4().hex[:12]
     session_dir = os.path.join("/tmp/whisper-sessions", session_id)
     os.makedirs(session_dir, exist_ok=True)
 
-    start_time = time.time()
-    audio_path = None
-    temp_files = []
-    video_title = "output"
-    audio_duration = 0.0
-    worker_id = None
-
-    def prog(pct, msg):
-        return format_progress_html(pct, msg), "", None, *_NO_TRANSLATION
+    start_time    = time.time()
+    temp_files    = []
+    audio_path    = None
+    audio_duration= 0.0
+    worker_id     = None
 
     print(f"\n{'=' * 60}")
-    print(f"🎦 Starting session: {session_id}")
+    print(f"🎦 ASR session: {session_id}")
     print(f"{'=' * 60}\n")
 
     try:
-        # ── Input preparation ──────────────────────────────────────────────
-        if youtube_url and youtube_url.strip():
-            if not is_youtube_url(youtube_url):
-                yield "❌ Invalid YouTube URL", "", None, *_NO_TRANSLATION
-                return
+        # ── Input ────────────────────────────────────────────────────────
+        result = None
+        for item in _prepare_input(audio_file, youtube_url, session_dir, _prog_asr):
+            if isinstance(item, tuple) and len(item) == 3 and isinstance(item[0], str) \
+                    and not item[0].startswith("❌"):
+                if os.path.isfile(item[0]):
+                    result = item
+                    temp_files.extend(item[2])
+                    break
+            yield item
 
-            yield prog(5, "Fetching video information...")
-            info = get_video_info(youtube_url)
-            if info:
-                video_title = info.get("title", "youtube_audio")
-                yield prog(10, f"Downloading: {video_title[:40]}...")
-
-            download_dir = os.path.join(session_dir, "downloads")
-            os.makedirs(download_dir, exist_ok=True)
-
-            audio_path, title = download_audio_with_progress(
-                youtube_url, output_dir=download_dir, progress_callback=None,
-            )
-            yield prog(30, "Download complete")
-
-            if audio_path is None:
-                yield "❌ Download failed. Please check the URL.", "", None, *_NO_TRANSLATION
-                return
-
-            if title:
-                video_title = title
-            temp_files.append(audio_path)
-
-        elif audio_file:
-            upload_copy = os.path.join(
-                session_dir,
-                f"upload_{uuid.uuid4().hex[:8]}{os.path.splitext(audio_file)[1]}",
-            )
-            shutil.copy2(audio_file, upload_copy)
-            temp_files.append(upload_copy)
-            video_title = os.path.splitext(os.path.basename(audio_file))[0]
-            audio_path = _ensure_wav(upload_copy, session_dir)
-            if audio_path != upload_copy:
-                temp_files.append(audio_path)
-            yield prog(10, "Audio file loaded and copied to session")
-            print(f"📁 Uploaded file in session: {audio_path}")
-        else:
-            yield "❌ Please upload an audio file or enter a YouTube URL", "", None, *_NO_TRANSLATION
+        if result is None:
             return
 
-        # ── Speech Enhancement ──────────────────────────────────────────
-        if use_enhancement and SPEECH_ENHANCEMENT_AVAILABLE and enhancement_mix > 0.0:
-            yield prog(28, f"Enhancing speech (DeepFilterNet3, mix={enhancement_mix:.2f})…")
-            enhanced_path = os.path.join(
-                session_dir,
-                f"enhanced_{uuid.uuid4().hex[:8]}{os.path.splitext(audio_path)[1]}",
-            )
-            try:
-                enhance_file(audio_path, enhanced_path, mix_factor=enhancement_mix)
-                audio_path = enhanced_path
-                temp_files.append(enhanced_path)
-                print(f"✅ Speech enhancement applied (mix={enhancement_mix:.2f})")
-            except Exception as e:
-                print(f"⚠️  Speech enhancement failed, continuing without it: {e}")
+        audio_path, video_title, _ = result
+
+        # ── Speech Enhancement (optional) ────────────────────────────────
+        if use_enhancement and enhancement_mix > 0.0:
+            if not is_model_available(enhancement_model):
+                print(f"⚠️  Enhancement model '{enhancement_model}' not available — skipping")
+            else:
+                model_label = next(
+                    (lbl for lbl, val in ENHANCEMENT_MODEL_CHOICES if val == enhancement_model),
+                    enhancement_model,
+                )
+                yield _prog_asr(28, f"Enhancing speech ({model_label}, mix={enhancement_mix:.2f})…")
+                enhanced_path = os.path.join(
+                    session_dir,
+                    f"enhanced_{uuid.uuid4().hex[:8]}{os.path.splitext(audio_path)[1]}",
+                )
+                try:
+                    enhance_file(
+                        audio_path, enhanced_path,
+                        mix_factor=enhancement_mix,
+                        model_name=enhancement_model,
+                    )
+                    audio_path = enhanced_path
+                    temp_files.append(enhanced_path)
+                    print(f"✅ Enhancement applied: {enhancement_model}")
+                except Exception as e:
+                    print(f"⚠️  Enhancement failed, continuing without it: {e}")
 
         try:
-            audio_info = sf.info(audio_path)
-            audio_duration = audio_info.duration
+            audio_duration = sf.info(audio_path).duration
             print(f"⏱️  Audio duration: {audio_duration:.1f}s")
         except Exception as e:
             print(f"Warning: Could not get audio duration: {e}")
-            audio_duration = 0.0
 
-        # ── VAD ────────────────────────────────────────────────────────
+        # ── VAD ──────────────────────────────────────────────────────────
         vad_chunks = None
         if use_vad:
-            yield prog(32, "Detecting speech segments with VAD...")
+            yield _prog_asr(32, "Detecting speech segments with VAD...")
             _vad = SileroVAD(min_silence_duration_ms=int(min_silence_duration_s * 1000))
             _audio, _sr = sf.read(audio_path, dtype="float32")
             if _audio.ndim == 2:
@@ -512,16 +771,16 @@ def process_audio(
             n_chunks = len(vad_chunks)
             print(f"🎯 VAD detected {n_chunks} speech segment(s)")
             if n_chunks == 0:
-                yield "⚠️ No speech detected", "", None, *_NO_TRANSLATION
+                yield "⚠️ No speech detected", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
                 return
-            yield prog(34, f"VAD: {n_chunks} speech segment(s) detected")
+            yield _prog_asr(34, f"VAD: {n_chunks} speech segment(s) detected")
 
-        yield prog(35, "Loading Whisper model...")
+        yield _prog_asr(35, "Loading Whisper model...")
 
         trans, worker_id = transcriber_pool.get_single_gpu_transcriber(
             model_size, use_vad, min_silence_duration_s
         )
-        yield prog(40, f"Model loaded on GPU {worker_id}. Starting transcription...")
+        yield _prog_asr(40, f"Model loaded on GPU {worker_id}. Starting transcription...")
         print(f"🔧 Using single-GPU transcriber on GPU {worker_id}")
 
         segments = trans.transcribe(
@@ -532,22 +791,21 @@ def process_audio(
             vad_chunks=vad_chunks,
         )
 
-        yield prog(85, "Transcription complete")
+        yield _prog_asr(85, "Transcription complete")
 
         if not segments:
-            yield "⚠️ No speech detected", "", None, *_NO_TRANSLATION
+            yield "⚠️ No speech detected", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
             return
 
         print(f"📝 Generated {len(segments)} segments")
-
         asr_segments = [seg.copy() for seg in segments]
 
-        is_hakka_model = model_size in HAKKA_MODELS_IDS
-        do_translate = translate_hakka and is_hakka_model and LLM_ENABLED
+        is_hakka_model    = model_size in HAKKA_MODELS_IDS
+        do_translate      = translate_hakka and is_hakka_model and LLM_ENABLED
         translated_segments = None
 
         if do_translate:
-            yield prog(86, "Translating Hakka → Mandarin via LLM...")
+            yield _prog_asr(86, "Translating Hakka → Mandarin via LLM...")
             translated_segments = translate_segments(
                 [seg.copy() for seg in asr_segments],
                 system_prompt=llm_system_prompt,
@@ -561,31 +819,25 @@ def process_audio(
         if language == "zh" and convert_to_traditional:
             converter = get_converter()
             if converter.is_available():
-                yield prog(88, "Converting to Traditional Chinese...")
+                yield _prog_asr(88, "Converting to Traditional Chinese...")
                 asr_segments = convert_segments_to_traditional(asr_segments)
                 if translated_segments is not None:
                     translated_segments = convert_segments_to_traditional(translated_segments)
                 print("✅ Converted to Traditional Chinese")
 
         if merge_subtitles:
-            yield prog(90, "Merging subtitle segments...")
+            yield _prog_asr(90, "Merging subtitle segments...")
             asr_segments = merge_segments(asr_segments, max_chars=max_chars)
             if translated_segments is not None:
                 translated_segments = merge_segments(translated_segments, max_chars=max_chars)
 
-        yield prog(95, "Generating SRT file(s)...")
+        yield _prog_asr(95, "Generating SRT file(s)...")
 
-        output_dir = (
-            "/app/outputs" if os.path.exists("/app/outputs") else tempfile.gettempdir()
-        )
-        os.makedirs(output_dir, exist_ok=True)
-
-        safe_title = "".join(
-            c for c in video_title if c.isalnum() or c in " -_"
-        ).strip()[:40]
+        output_dir = _get_output_dir()
+        safe        = _safe_title(video_title)
 
         asr_srt_content = segments_to_srt(asr_segments)
-        asr_srt_path    = _save_srt(asr_srt_content, safe_title, "asr", output_dir)
+        asr_srt_path    = _save_srt(asr_srt_content, safe, "asr", output_dir)
         print(f"💾 ASR SRT saved: {asr_srt_path}")
 
         translated_srt_content = ""
@@ -594,71 +846,71 @@ def process_audio(
 
         if translated_segments is not None:
             translated_srt_content = segments_to_srt(translated_segments)
-            translated_srt_path    = _save_srt(translated_srt_content, safe_title, "translated", output_dir)
+            translated_srt_path    = _save_srt(translated_srt_content, safe, "translated", output_dir)
             translated_col_update  = gr.update(visible=True)
             print(f"💾 Translated SRT saved: {translated_srt_path}")
 
-        processing_time = time.time() - start_time
-        rtf = (processing_time / audio_duration) if (audio_duration > 0 and processing_time > 0) else None
-
-        metrics = [
-            ("📝", "Segments",   str(len(asr_segments))),
-            ("⏱️", "Audio",      f"{audio_duration:.1f}s" if audio_duration > 0 else None),
-            ("⚡", "Processing", f"{processing_time:.1f}s"),
-            ("🚀", "RTF",        f"{rtf:.4f}" if rtf is not None else None),
-        ]
+        elapsed = time.time() - start_time
+        rtf     = (elapsed / audio_duration) if audio_duration > 0 else None
 
         badge_style = (
             "display:inline-flex;align-items:center;gap:6px;"
             "background:#f0f7ff;border:1px solid #c7dff7;border-radius:8px;"
             "padding:6px 12px;margin:4px;font-size:14px;"
         )
-        label_style = "color:#555;font-weight:400;"
-        value_style = "color:#1565c0;font-weight:600;"
+        label_s = "color:#555;font-weight:400;"
+        value_s = "color:#1565c0;font-weight:600;"
 
+        metrics = [
+            ("📝", "Segments",   str(len(asr_segments))),
+            ("⏱️", "Audio",      f"{audio_duration:.1f}s" if audio_duration > 0 else None),
+            ("⚡", "Processing", f"{elapsed:.1f}s"),
+            ("🚀", "RTF",        f"{rtf:.4f}" if rtf is not None else None),
+        ]
         badges_html = "".join(
             f'<span style="{badge_style}">'
-            f'{icon} <span style="{label_style}">{label}:</span>'
-            f'<span style="{value_style}">{value}</span>'
+            f'{icon} <span style="{label_s}">{label}:</span>'
+            f'<span style="{value_s}">{value}</span>'
             f'</span>'
             for icon, label, value in metrics if value is not None
         )
-        parts = [
+        status_html = (
             '<div style="margin-bottom:6px;font-weight:600;color:#2e7d32;font-size:15px">'
-            '✅ Transcription complete</div>',
-            f'<div style="display:flex;flex-wrap:wrap;gap:2px">{badges_html}</div>',
-        ]
+            '✅ Transcription complete</div>'
+            f'<div style="display:flex;flex-wrap:wrap;gap:2px">{badges_html}</div>'
+        )
 
         print(f"\n{'=' * 60}")
-        print(f"✅ Session completed: {session_id}  ({processing_time:.1f}s)")
+        print(f"✅ ASR session done: {session_id}  ({elapsed:.1f}s)")
         print(f"{'=' * 60}\n")
 
         yield (
-            "".join(parts),
+            status_html,
             asr_srt_content,
             asr_srt_path,
             translated_col_update,
             translated_srt_content,
             translated_srt_path,
+            gr.update(visible=False),   # enhance_only_col stays hidden
+            None,                        # enhanced_audio
+            None,                        # spectrogram_image
         )
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"\n❌ Session failed: {session_id}\nError: {str(e)}\n")
-        yield "❌ 處理失敗，請稍後再試。", "", None, *_NO_TRANSLATION
+        print(f"\n❌ ASR session failed: {session_id}\nError: {e}\n")
+        yield "❌ 處理失敗，請稍後再試。", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
 
     finally:
         if worker_id is not None:
             transcriber_pool.release_single_gpu_transcriber(worker_id)
-
         for f in temp_files:
             if f and os.path.exists(f):
                 try:
                     os.unlink(f)
                 except Exception:
                     pass
-
         if os.path.exists(session_dir):
             try:
                 shutil.rmtree(session_dir)
@@ -666,11 +918,53 @@ def process_audio(
                 pass
 
 
-# ── Gradio interface ──────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# Unified dispatcher — wired to the Start button
+# ═════════════════════════════════════════════════════════════════════════════
+
+def run(
+    mode: str,
+    # shared inputs
+    audio_file: Optional[str],
+    youtube_url: str,
+    # enhancement
+    use_enhancement: bool,
+    enhancement_model: str,
+    enhancement_mix: float,
+    # ASR-only inputs
+    model_size: str,
+    language: str,
+    task: str,
+    use_vad: bool,
+    min_silence_duration_s: float,
+    merge_subtitles: bool,
+    convert_to_traditional: bool,
+    max_chars: int,
+    translate_hakka: bool,
+    llm_system_prompt: str,
+    use_lexicon: bool,
+) -> Generator:
+    """Route to enhance-only or ASR pipeline based on `mode`."""
+    if mode == MODE_ENHANCE_ONLY:
+        yield from _run_enhance_only(
+            audio_file, youtube_url, enhancement_model, enhancement_mix,
+        )
+    else:
+        yield from _run_asr(
+            audio_file, youtube_url, model_size, language, task,
+            use_vad, min_silence_duration_s, merge_subtitles,
+            convert_to_traditional, max_chars, translate_hakka,
+            llm_system_prompt, use_lexicon,
+            use_enhancement, enhancement_model, enhancement_mix,
+        )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Gradio interface
+# ═════════════════════════════════════════════════════════════════════════════
 
 def create_interface() -> gr.Blocks:
 
-    # Build language radio choices dynamically — hide Hakka/Taigi if no model configured
     lang_choices = [
         ("Auto",     "auto"),
         ("Mandarin", "zh"),
@@ -687,6 +981,7 @@ def create_interface() -> gr.Blocks:
         css=CUSTOM_CSS,
         analytics_enabled=False,
     ) as app:
+
         gr.Markdown(
             """
             # FormoSTT: Speech-to-Text System for Taiwanese Languages
@@ -725,9 +1020,7 @@ def create_interface() -> gr.Blocks:
                     type="filepath",
                     sources=["upload", "microphone"],
                 )
-
                 gr.Markdown("**OR**")
-
                 youtube_input = gr.Textbox(
                     label="YouTube URL",
                     placeholder="https://www.youtube.com/watch?v=...",
@@ -736,74 +1029,74 @@ def create_interface() -> gr.Blocks:
 
                 gr.Markdown("### ⚙️ Settings")
 
-                # Determine initial language / model from env
-                default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
-                if default_model in TAIGI_MODELS_IDS:
-                    init_lang_sel    = "taigi"
-                    init_model_value = default_model
-                elif default_model in HAKKA_MODELS_IDS:
-                    init_lang_sel    = "hakka"
-                    init_model_value = default_model
-                else:
-                    init_lang_sel    = "auto"
-                    init_model_value = default_model if default_model in GENERAL_MODELS_IDS else "large-v3-turbo"
-
-                language_selector = gr.Radio(
-                    choices=lang_choices,
-                    value=init_lang_sel,
-                    label="Language",
+                # ── Mode selector ───────────────────────────────────────
+                mode_radio = gr.Radio(
+                    choices=[
+                        ("🎙️ ASR (Transcribe)", MODE_ASR),
+                        ("🔊 Enhance Only",      MODE_ENHANCE_ONLY),
+                    ],
+                    value=MODE_ASR,
+                    label="Mode",
+                    info=(
+                        "ASR: full speech-to-text pipeline  |  "
+                        "Enhance Only: noise suppression → enhanced WAV + spectrogram"
+                    ),
                 )
 
-                # Initial model choices depend on selected language
-                if init_lang_sel == "taigi":
-                    init_model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in TAIGI_MODELS_IDS]
-                elif init_lang_sel == "hakka":
-                    init_model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in HAKKA_MODELS_IDS]
-                else:
-                    init_model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in GENERAL_MODELS_IDS]
-
-                model_dropdown = gr.Radio(
-                    choices=init_model_choices,
-                    value=init_model_value,
-                    label="Model",
-                )
-
-                # Initial task choices depend on selected model
-                def _task_cfg_for_model(model_name):
-                    """Return (choices, value, interactive, info) for task_radio."""
-                    if model_name in TAIGI_MODELS_IDS:
-                        return (
-                            [("Translate to Mandarin", "translate_mandarin")],
-                            "translate_mandarin", False,
-                            "Taigi model always outputs Mandarin",
-                        )
-                    elif model_name == "large-v3-turbo":
-                        return (
-                            [("Transcribe", "transcribe")],
-                            "transcribe", False,
-                            "Note: large-v3-turbo only supports Transcribe",
-                        )
-                    elif model_name in HAKKA_MODELS_IDS:
-                        return (
-                            [("Transcribe", "transcribe")],
-                            "transcribe", False,
-                            "Hakka model only supports Transcribe",
-                        )
+                # ── ASR settings (hidden in Enhance-Only mode) ──────────
+                with gr.Column(visible=True) as asr_settings_col:
+                    default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
+                    if default_model in TAIGI_MODELS_IDS:
+                        init_lang_sel    = "taigi"
+                        init_model_value = default_model
+                    elif default_model in HAKKA_MODELS_IDS:
+                        init_lang_sel    = "hakka"
+                        init_model_value = default_model
                     else:
-                        return (
-                            [("Transcribe", "transcribe"), ("Translate to English", "translate")],
-                            "transcribe", True, None,
-                        )
+                        init_lang_sel    = "auto"
+                        init_model_value = default_model if default_model in GENERAL_MODELS_IDS else "large-v3-turbo"
 
-                def _task_update_for_model(model_name):
-                    choices, value, interactive, info = _task_cfg_for_model(model_name)
-                    return gr.update(choices=choices, value=value,
-                                     interactive=interactive, info=info)
+                    language_selector = gr.Radio(
+                        choices=lang_choices,
+                        value=init_lang_sel,
+                        label="Language",
+                    )
 
-                init_task_choices, init_task_value, init_task_interactive, init_task_info = \
-                    _task_cfg_for_model(init_model_value)
+                    if init_lang_sel == "taigi":
+                        init_model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in TAIGI_MODELS_IDS]
+                    elif init_lang_sel == "hakka":
+                        init_model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in HAKKA_MODELS_IDS]
+                    else:
+                        init_model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in GENERAL_MODELS_IDS]
 
-                with gr.Row():
+                    model_dropdown = gr.Radio(
+                        choices=init_model_choices,
+                        value=init_model_value,
+                        label="Model",
+                    )
+
+                    def _task_cfg_for_model(model_name):
+                        if model_name in TAIGI_MODELS_IDS:
+                            return ([("Translate to Mandarin", "translate_mandarin")],
+                                    "translate_mandarin", False, "Taigi model always outputs Mandarin")
+                        elif model_name == "large-v3-turbo":
+                            return ([("Transcribe", "transcribe")],
+                                    "transcribe", False, "Note: large-v3-turbo only supports Transcribe")
+                        elif model_name in HAKKA_MODELS_IDS:
+                            return ([("Transcribe", "transcribe")],
+                                    "transcribe", False, "Hakka model only supports Transcribe")
+                        else:
+                            return ([("Transcribe", "transcribe"), ("Translate to English", "translate")],
+                                    "transcribe", True, None)
+
+                    def _task_update_for_model(model_name):
+                        choices, value, interactive, info = _task_cfg_for_model(model_name)
+                        return gr.update(choices=choices, value=value,
+                                         interactive=interactive, info=info)
+
+                    init_task_choices, init_task_value, init_task_interactive, init_task_info = \
+                        _task_cfg_for_model(init_model_value)
+
                     task_radio = gr.Radio(
                         choices=init_task_choices,
                         value=init_task_value,
@@ -812,53 +1105,68 @@ def create_interface() -> gr.Blocks:
                         info=init_task_info,
                     )
 
-                with gr.Column(visible=True):
+                    with gr.Row():
+                        use_vad_checkbox = gr.Checkbox(value=True,  label="Enable VAD")
+                        merge_checkbox   = gr.Checkbox(value=True,  label="Merge Short Subtitles")
+                        zh_conv_checkbox = gr.Checkbox(value=False, label="Convert to zh-TW")
+
+                    min_silence_slider = gr.Slider(
+                        minimum=0.01, maximum=2.0, value=0.2, step=0.01,
+                        label="VAD: Minimum Silence Duration (seconds)",
+                    )
+                    max_chars_slider = gr.Slider(
+                        minimum=40, maximum=120, value=80, step=10,
+                        label="Max Characters Per Line",
+                    )
+
+                    with gr.Column(visible=False) as llm_col:
+                        translate_hakka_checkbox = gr.Checkbox(
+                            value=True,
+                            label="🤖 Translate Hakka → Mandarin (via Ollama LLM)",
+                            interactive=LLM_ENABLED,
+                            info=None if LLM_ENABLED else "LLM not deployed (ENABLE_LLM=false)",
+                        )
+                        use_lexicon_checkbox = gr.Checkbox(
+                            value=True,
+                            label="📚 Use Lexicon Augmentation",
+                            interactive=LLM_ENABLED,
+                        )
+                        llm_prompt_textbox = gr.Textbox(
+                            value=DEFAULT_SYSTEM_PROMPT,
+                            label="🤖 LLM System Prompt",
+                            lines=6,
+                        )
+
+                # ── Speech Enhancement ──────────────────────────────────
+                with gr.Column(visible=True) as enhancement_settings_col:
                     use_enhancement_checkbox = gr.Checkbox(
                         value=False,
                         label="🔊 Speech Enhancement",
                         interactive=SPEECH_ENHANCEMENT_AVAILABLE,
                         info=None if SPEECH_ENHANCEMENT_AVAILABLE
-                             else "deepfilternet not installed",
+                             else "No enhancement backend installed",
+                    )
+
+                    _enh_info_parts = []
+                    if any(v == DEEPFILTERNET3 for _, v in ENHANCEMENT_MODEL_CHOICES):
+                        _enh_info_parts.append("DeepFilterNet3: 48 kHz fullband")
+                    if any(v.startswith("dpdfnet") for _, v in ENHANCEMENT_MODEL_CHOICES):
+                        _enh_info_parts.append("DPDFNet: 16 kHz causal — Baseline (fastest) → 2 → 4 → 8 (best)")
+                    _enh_model_info = " | ".join(_enh_info_parts) or None
+
+                    enhancement_model_dropdown = gr.Dropdown(
+                        choices=ENHANCEMENT_MODEL_CHOICES,
+                        value=_DEFAULT_ENHANCEMENT_MODEL,
+                        label="Enhancement Model",
+                        visible=False,
+                        interactive=True,
+                        info=_enh_model_info,
                     )
                     enhancement_mix_slider = gr.Slider(
                         minimum=0.0, maximum=1.0, value=1.0, step=0.05,
                         label="Enhancement Blend (0 = original, 1 = fully enhanced)",
-                        visible=True,
+                        visible=False,
                         interactive=True,
-                    )
-
-                with gr.Row():
-                    use_vad_checkbox   = gr.Checkbox(value=True,  label="Enable VAD")
-                    merge_checkbox     = gr.Checkbox(value=True,  label="Merge Short Subtitles")
-                    zh_conv_checkbox   = gr.Checkbox(value=False, label="Convert to zh-TW")
-
-                min_silence_slider = gr.Slider(
-                    minimum=0.01, maximum=2.0, value=0.2, step=0.01,
-                    label="VAD: Minimum Silence Duration (seconds)",
-                )
-
-                max_chars_slider = gr.Slider(
-                    minimum=40, maximum=120, value=80, step=10,
-                    label="Max Characters Per Line",
-                )
-
-                with gr.Column(visible=False) as llm_col:
-                    translate_hakka_checkbox = gr.Checkbox(
-                        value=True,
-                        label="🤖 Translate Hakka → Mandarin (via Ollama LLM)",
-                        interactive=LLM_ENABLED,
-                        info=None if LLM_ENABLED else "LLM not deployed (ENABLE_LLM=false)",
-                    )
-                    use_lexicon_checkbox = gr.Checkbox(
-                        value=True,
-                        label="📚 Use Lexicon Augmentation",
-                        interactive=LLM_ENABLED,
-                    )
-                    llm_prompt_textbox = gr.Textbox(
-                        value=DEFAULT_SYSTEM_PROMPT,
-                        label="🤖 LLM System Prompt",
-                        lines=6,
-                        visible=True,
                     )
 
                 process_btn = gr.Button("🚀 Start", variant="primary", size="lg")
@@ -869,36 +1177,62 @@ def create_interface() -> gr.Blocks:
 
                 status_text = gr.HTML("Waiting for input...")
 
-                gr.Markdown("#### 🗣️ ASR Result")
-                asr_srt_output = gr.Textbox(
-                    label="SRT Subtitle Content (ASR)",
-                    lines=12,
-                    max_lines=20,
-                )
-                with gr.Row():
-                    asr_copy_btn    = gr.Button("Copy", elem_classes="copy-button")
-                    asr_copy_status = gr.HTML("", elem_classes="copy-success")
-                asr_srt_file = gr.File(label="Download ASR SRT")
-
-                with gr.Column(visible=False) as translated_col:
-                    gr.Markdown("#### 🌐 Translation Result (Mandarin)")
-                    translated_srt_output = gr.Textbox(
-                        label="SRT Subtitle Content (Translated)",
+                # ── ASR output ──────────────────────────────────────────
+                with gr.Column(visible=True) as asr_output_col:
+                    gr.Markdown("#### 🗣️ ASR Result")
+                    asr_srt_output = gr.Textbox(
+                        label="SRT Subtitle Content (ASR)",
                         lines=12,
                         max_lines=20,
                     )
                     with gr.Row():
-                        trans_copy_btn    = gr.Button("Copy", elem_classes="copy-button")
-                        trans_copy_status = gr.HTML("", elem_classes="copy-success")
-                    translated_srt_file = gr.File(label="Download Translated SRT")
+                        asr_copy_btn    = gr.Button("Copy", elem_classes="copy-button")
+                        asr_copy_status = gr.HTML("", elem_classes="copy-success")
+                    asr_srt_file = gr.File(label="Download ASR SRT")
+
+                    with gr.Column(visible=False) as translated_col:
+                        gr.Markdown("#### 🌐 Translation Result (Mandarin)")
+                        translated_srt_output = gr.Textbox(
+                            label="SRT Subtitle Content (Translated)",
+                            lines=12,
+                            max_lines=20,
+                        )
+                        with gr.Row():
+                            trans_copy_btn    = gr.Button("Copy", elem_classes="copy-button")
+                            trans_copy_status = gr.HTML("", elem_classes="copy-success")
+                        translated_srt_file = gr.File(label="Download Translated SRT")
+
+                # ── Enhance-Only output ─────────────────────────────────
+                with gr.Column(visible=False) as enhance_only_col:
+                    gr.Markdown("#### 🔊 Enhanced Audio")
+                    enhanced_audio = gr.Audio(
+                        label="Enhanced Audio (playable & downloadable)",
+                        type="filepath",
+                        interactive=False,
+                    )
+                    gr.Markdown(
+                        "#### 📊 Spectrogram\n"
+                        "<small>X-axis = time (seconds), aligned with the audio player above. "
+                        "Y-axis = frequency (kHz). Colour = log power (dB).</small>"
+                    )
+                    spectrogram_image = gr.Image(
+                        label="Time-Aligned Spectrogram",
+                        type="filepath",
+                        interactive=False,
+                        show_download_button=True,
+                    )
 
         # ── Event handlers ──────────────────────────────────────────────
 
         process_btn.click(
-            fn=process_audio,
+            fn=run,
             inputs=[
+                mode_radio,
                 audio_input,
                 youtube_input,
+                use_enhancement_checkbox,
+                enhancement_model_dropdown,
+                enhancement_mix_slider,
                 model_dropdown,
                 language_selector,
                 task_radio,
@@ -910,8 +1244,6 @@ def create_interface() -> gr.Blocks:
                 translate_hakka_checkbox,
                 llm_prompt_textbox,
                 use_lexicon_checkbox,
-                use_enhancement_checkbox,
-                enhancement_mix_slider,
             ],
             outputs=[
                 status_text,
@@ -920,24 +1252,59 @@ def create_interface() -> gr.Blocks:
                 translated_col,
                 translated_srt_output,
                 translated_srt_file,
+                enhance_only_col,
+                enhanced_audio,
+                spectrogram_image,
             ],
         )
 
+        # ── Mode radio: show/hide ASR vs Enhance-Only sections ──────────
+        def on_mode_change(mode):
+            is_asr = (mode == MODE_ASR)
+            # In enhance-only mode, force enhancement checkbox on so the model
+            # dropdown and blend slider appear (they're needed as primary controls).
+            enh_checked = not is_asr
+            return (
+                gr.update(visible=is_asr),      # asr_settings_col
+                gr.update(visible=is_asr),      # asr_output_col
+                gr.update(visible=False),        # enhance_only_col (reset; shown after run)
+                gr.update(                       # use_enhancement_checkbox
+                    value=enh_checked,
+                    interactive=is_asr and SPEECH_ENHANCEMENT_AVAILABLE,
+                ),
+                # Show model dropdown + blend slider immediately in enhance-only mode
+                gr.update(visible=not is_asr and SPEECH_ENHANCEMENT_AVAILABLE),
+                gr.update(visible=not is_asr and SPEECH_ENHANCEMENT_AVAILABLE),
+            )
+
+        mode_radio.change(
+            fn=on_mode_change,
+            inputs=[mode_radio],
+            outputs=[
+                asr_settings_col,
+                asr_output_col,
+                enhance_only_col,
+                use_enhancement_checkbox,
+                enhancement_model_dropdown,
+                enhancement_mix_slider,
+            ],
+            queue=False,
+        )
+
+        # ── Language → update ASR model list ────────────────────────────
         def on_language_change(lang):
-            """Update model choices + task choices when language selector changes."""
             if lang == "taigi":
                 model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in TAIGI_MODELS_IDS]
-                new_model     = TAIGI_MODELS_IDS[0]
-                is_hakka      = False
+                new_model = TAIGI_MODELS_IDS[0]
+                is_hakka  = False
             elif lang == "hakka":
                 model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in HAKKA_MODELS_IDS]
-                new_model     = HAKKA_MODELS_IDS[0]
-                is_hakka      = True
+                new_model = HAKKA_MODELS_IDS[0]
+                is_hakka  = True
             else:
                 model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in GENERAL_MODELS_IDS]
-                new_model     = "large-v3-turbo"
-                is_hakka      = False
-
+                new_model = "large-v3-turbo"
+                is_hakka  = False
             return (
                 gr.update(choices=model_choices, value=new_model),
                 _task_update_for_model(new_model),
@@ -950,19 +1317,13 @@ def create_interface() -> gr.Blocks:
         language_selector.change(
             fn=on_language_change,
             inputs=[language_selector],
-            outputs=[
-                model_dropdown,
-                task_radio,
-                llm_col,
-                translate_hakka_checkbox,
-                llm_prompt_textbox,
-                translated_col,
-            ],
+            outputs=[model_dropdown, task_radio, llm_col,
+                     translate_hakka_checkbox, llm_prompt_textbox, translated_col],
             queue=False,
         )
 
+        # ── Whisper model → update task list ────────────────────────────
         def on_model_change(model_name):
-            """Update task choices when a specific model is chosen."""
             is_hakka = model_name in HAKKA_MODELS_IDS
             return (
                 _task_update_for_model(model_name),
@@ -975,50 +1336,45 @@ def create_interface() -> gr.Blocks:
         model_dropdown.change(
             fn=on_model_change,
             inputs=[model_dropdown],
-            outputs=[
-                task_radio,
-                llm_col,
-                translate_hakka_checkbox,
-                llm_prompt_textbox,
-                translated_col,
-            ],
+            outputs=[task_radio, llm_col, translate_hakka_checkbox,
+                     llm_prompt_textbox, translated_col],
             queue=False,
         )
 
+        # ── Enhancement checkbox → show/hide model dropdown & blend ─────
+        def on_enhancement_toggle(checked):
+            vis = checked and SPEECH_ENHANCEMENT_AVAILABLE
+            return gr.update(visible=vis), gr.update(visible=vis)
+
         use_enhancement_checkbox.change(
-            fn=lambda checked: gr.update(interactive=checked),
+            fn=on_enhancement_toggle,
             inputs=[use_enhancement_checkbox],
-            outputs=[enhancement_mix_slider],
+            outputs=[enhancement_model_dropdown, enhancement_mix_slider],
             queue=False,
             show_progress="hidden",
         )
 
+        # ── Audio/YouTube mutual exclusion ───────────────────────────────
         audio_input.change(
             fn=lambda x: "" if x else gr.update(),
-            inputs=[audio_input],
-            outputs=[youtube_input],
-            queue=False,
+            inputs=[audio_input], outputs=[youtube_input], queue=False,
         )
         youtube_input.change(
             fn=lambda x: None if x else gr.update(),
-            inputs=[youtube_input],
-            outputs=[audio_input],
-            queue=False,
+            inputs=[youtube_input], outputs=[audio_input], queue=False,
         )
 
+        # ── VAD / merge checkbox → show/hide dependent sliders ───────────
         merge_checkbox.change(
             fn=lambda x: gr.update(visible=x),
-            inputs=[merge_checkbox],
-            outputs=[max_chars_slider],
-            queue=False,
+            inputs=[merge_checkbox], outputs=[max_chars_slider], queue=False,
         )
         use_vad_checkbox.change(
             fn=lambda x: gr.update(visible=x),
-            inputs=[use_vad_checkbox],
-            outputs=[min_silence_slider],
-            queue=False,
+            inputs=[use_vad_checkbox], outputs=[min_silence_slider], queue=False,
         )
 
+        # ── Copy buttons ─────────────────────────────────────────────────
         _COPY_JS = """(content) => {
             if (!content) return "⚠️ No content to copy";
             navigator.clipboard.writeText(content).then(
@@ -1027,54 +1383,46 @@ def create_interface() -> gr.Blocks:
             );
             return "✅ Copied!";
         }"""
+        asr_copy_btn.click(fn=None, inputs=[asr_srt_output], outputs=[asr_copy_status], js=_COPY_JS)
+        trans_copy_btn.click(fn=None, inputs=[translated_srt_output], outputs=[trans_copy_status], js=_COPY_JS)
 
-        asr_copy_btn.click(
-            fn=None, inputs=[asr_srt_output], outputs=[asr_copy_status], js=_COPY_JS,
-        )
-        trans_copy_btn.click(
-            fn=None, inputs=[translated_srt_output], outputs=[trans_copy_status], js=_COPY_JS,
-        )
-
+        # ── Examples ────────────────────────────────────────────────────
         gr.Markdown("### 📋 Examples")
-
-        ground_truth_textbox = gr.Textbox(
-            label="Ground Truth",
-            interactive=False,
-            lines=3,
-        )
-
+        ground_truth_textbox = gr.Textbox(label="Ground Truth", interactive=False, lines=3)
         gr.Examples(
             examples=[
-                [
-                    "samples/734a04794010481cb3eed411b6e005cc.wav",
-                    "hakka",
-                    "下二隻月就愛過年吔，魚仔相關个產品就開始起價，因為呢愛分民眾在防疫期間乜買得著萋萋个魚貨，苗栗魚市場就特別推出咧限量个過年禮盒，用網路，注文還過送貨到屋个服務，還過較便宜个價數，分苗栗鄉親在屋下裡肚，乜買得著萋萋又有保障个魚貨。",
-                ],
-                [
-                    "samples/874062dc1657497b9ac996971c9ce4bb.wav",
-                    "hakka",
-                    "這隻世界項有當多人高不將愛摎自家个夢想放忒去，你既然做得追求你个夢想，你就愛認真煞猛分佢兜試著當見笑啊。",
-                ],
-                [
-                    "samples/fmZk_OSHbiY.wav",
-                    "taigi",
-                    "我相信在這樣的景況下，你的心必會很難過，不是嗎？甚至會生氣。不過我們都知道，這樣的生氣實在是一種愛的表達，因為生的痛，所以心會痛。我覺得臺語很美，痛、疼，真正的愛是心會痛。也因為父母是真的愛孩子，所以我們必不會那麼快就放孩子，讓他們走向自我滅亡的道路，不是嗎？我們的上帝也是如此。各位，我們的上帝是慈愛中有公義，公義中有慈愛的上帝。",
-                ],
+                ["samples/734a04794010481cb3eed411b6e005cc.wav", "hakka",
+                 "下二隻月就愛過年吔，魚仔相關个產品就開始起價，因為呢愛分民眾在防疫期間乜買得著萋萋个魚貨，"
+                 "苗栗魚市場就特別推出咧限量个過年禮盒，用網路，注文還過送貨到屋个服務，還過較便宜个價數，"
+                 "分苗栗鄉親在屋下裡肚，乜買得著萋萋又有保障个魚貨。"],
+                ["samples/874062dc1657497b9ac996971c9ce4bb.wav", "hakka",
+                 "這隻世界項有當多人高不將愛摎自家个夢想放忒去，你既然做得追求你个夢想，"
+                 "你就愛認真煞猛分佢兜試著當見笑啊。"],
+                ["samples/fmZk_OSHbiY.wav", "taigi",
+                 "我相信在這樣的景況下，你的心必會很難過，不是嗎？甚至會生氣。"
+                 "不過我們都知道，這樣的生氣實在是一種愛的表達，因為生的痛，所以心會痛。"],
             ],
-            inputs=[
-                audio_input,
-                language_selector,
-                ground_truth_textbox,
-            ],
+            inputs=[audio_input, language_selector, ground_truth_textbox],
         )
 
     return app
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# Entry point
+# ═════════════════════════════════════════════════════════════════════════════
+
 def main():
     print("\n" + "=" * 60)
-    print("🚀 Starting Whisper ASR Service (Improved Version)")
+    print("🚀 Starting FormoSTT")
     print("=" * 60 + "\n")
+
+    if ENHANCEMENT_MODEL_CHOICES:
+        print("🔊 Enhancement models available:")
+        for label, val in ENHANCEMENT_MODEL_CHOICES:
+            print(f"   • {val}  ({label})")
+    else:
+        print("ℹ️  No speech enhancement backend installed")
 
     print("🧹 Cleaning up temporary files...")
     for path in ["/tmp/whisper-downloads", "/tmp/whisper-sessions"]:
@@ -1088,9 +1436,11 @@ def main():
     output_dir = "/app/outputs"
     if os.path.exists(output_dir):
         try:
-            for f in glob.glob(os.path.join(output_dir, "*.srt")):
+            for f in glob.glob(os.path.join(output_dir, "*.srt")) + \
+                     glob.glob(os.path.join(output_dir, "*.wav")) + \
+                     glob.glob(os.path.join(output_dir, "*.png")):
                 os.unlink(f)
-            print(f"  ✓ Cleaned old SRT files in {output_dir}")
+            print(f"  ✓ Cleaned old outputs in {output_dir}")
         except Exception as e:
             print(f"  ⚠️  Failed to clean {output_dir}: {e}")
 
@@ -1113,35 +1463,32 @@ def main():
             "/app/.users",
         ]
         users_file = next((p for p in candidates if os.path.exists(p)), None)
-        users = {}
         if users_file is None:
-            return users
+            return {}
+        users = {}
         with open(users_file, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith("#"):
+                if not line or line.startswith("#") or ":" not in line:
                     continue
-                if ":" not in line:
-                    continue
-                username, password = line.split(":", 1)
-                users[username.strip()] = password.strip()
+                u, p = line.split(":", 1)
+                users[u.strip()] = p.strip()
         return users
 
     _users = _load_users()
     if not _users:
-        _legacy_pw = os.environ.get("GRADIO_PASSWORD", "").strip()
-        if _legacy_pw:
-            _users = {"admin": _legacy_pw}
+        pw = os.environ.get("GRADIO_PASSWORD", "").strip()
+        if pw:
+            _users = {"admin": pw}
 
     auth_list = [(u, p) for u, p in _users.items()] if _users else None
-    if auth_list:
-        print("Authentication enabled: " + ", ".join(_users.keys()))
-    else:
-        print("No credentials configured - running without authentication")
+    print(
+        ("Authentication enabled: " + ", ".join(_users.keys()))
+        if auth_list else "No credentials configured - running without authentication"
+    )
 
     gradio_app = create_interface()
     gradio_app.queue(max_size=10, default_concurrency_limit=2, api_open=False)
-
     gradio_app.launch(
         server_name=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
         server_port=int(os.environ.get("GRADIO_SERVER_PORT", 7860)),
@@ -1149,6 +1496,7 @@ def main():
         auth_message="FormoSTT 臺灣語音辨識暨翻譯系統",
         share=False,
     )
+
 
 if __name__ == "__main__":
     main()

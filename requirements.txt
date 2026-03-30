@@ -18,8 +18,17 @@ soundfile>=0.12.1
 numpy>=1.24.0
 scipy>=1.10.0  # For audio resampling
 
-# Speech Enhancement
+# Speech Enhancement — DeepFilterNet3
 deepfilternet  # DeepFilterNet3 noise suppression
+
+# Speech Enhancement — DPDFNet (TFLite-based, lightweight)
+# Prefer the standalone runtime to avoid pulling in all of TensorFlow.
+# tflite-runtime wheels are available for Linux x86-64 / aarch64 on PyPI.
+# If tflite-runtime is unavailable for your platform, install tensorflow instead.
+tflite-runtime>=2.14.0  # DPDFNet TFLite inference (no GPU required)
+
+# DPDFNet model download
+huggingface_hub>=0.20.0  # already implied by transformers, listed for clarity
 
 # Utilities
 ffmpeg-python>=0.2.0
@@ -30,4 +39,3 @@ opencc-python-reimplemented>=0.1.7
 
 # Model Conversion
 transformers
-
