@@ -12,14 +12,28 @@ Speech enhancement module — supports two backends:
      - 16 kHz models: baseline / dpdfnet2 / dpdfnet4 / dpdfnet8
      - 48 kHz fullband model: dpdfnet2_48khz_hr
      - Requires: pip install tflite-runtime  (or tensorflow)
-     - 16 kHz models work DIRECTLY with our pipeline — no resampling needed!
      - Paper: https://arxiv.org/abs/2512.16420
      - Models: https://huggingface.co/Ceva-IP/DPDFNet
 
+DPDFNet input/output format
+----------------------------
+The TFLite models are **frequency-domain** (STFT-based), NOT time-domain.
+Input shape: [1, 1, n_fft//2+1, 2]  — one STFT frame, complex (real+imag)
+Output shape: same as input.
+
+STFT parameters are derived from the model's freq_bins dimension:
+    n_fft    = (freq_bins - 1) * 2
+    hop_size = n_fft // 2
+    window   = Hann
+
+Pipeline per file:
+    audio  →  resample (if needed)
+           →  STFT  →  frame loop (stateful TFLite invoke)  →  iSTFT
+           →  resample back (if needed)
+           →  mix with original
+
 Shared API
 ----------
-Both backends expose the same top-level functions:
-
     enhance_audio(audio, sr, mix_factor, model_name) → np.ndarray
     enhance_file(input_path, output_path, mix_factor, model_name) → str
     is_model_available(model_name) → bool
@@ -51,13 +65,13 @@ DPDFNET_MODELS_48K = {
 }
 DPDFNET_ALL_MODELS = {**DPDFNET_MODELS_16K, **DPDFNET_MODELS_48K}
 
-# Directory where .tflite files are stored (configurable via env var)
 DPDFNET_MODELS_DIR = os.environ.get("DPDFNET_MODELS_DIR", "/app/models/dpdfnet")
+
 
 # ── DeepFilterNet3 backend ────────────────────────────────────────────────────
 
-_df3_model    = None
-_df3_state    = None
+_df3_model = None
+_df3_state = None
 
 
 def _patch_torchaudio_compat() -> None:
@@ -72,7 +86,6 @@ def _patch_torchaudio_compat() -> None:
         return
     except (ImportError, ModuleNotFoundError):
         pass
-
     import torchaudio
     AM = getattr(torchaudio, "AudioMetaData", type("AudioMetaData", (), {}))
     bm = types.ModuleType("torchaudio.backend")
@@ -86,85 +99,55 @@ def _patch_torchaudio_compat() -> None:
 
 
 def is_deepfilter_available() -> bool:
-    """Return True if deepfilternet is installed (no import cost)."""
     import importlib.util
     return importlib.util.find_spec("df") is not None
 
 
 def _load_df3_model():
-    """Load DeepFilterNet3 (once, cached for process lifetime)."""
     global _df3_model, _df3_state
     if _df3_model is not None:
         return _df3_model, _df3_state
-
     _patch_torchaudio_compat()
     from df import init_df
-
     model_base = os.environ.get("DF_PRETRAINED_MODELS_PATH", "")
     candidate  = os.path.join(model_base, "DeepFilterNet3") if model_base else ""
     init_arg   = candidate if (candidate and os.path.isdir(candidate)) else "DeepFilterNet3"
-
     print(f"🔊 Loading DeepFilterNet3 from '{init_arg}' …")
     _df3_model, _df3_state, _ = init_df(init_arg, log_level="none")
     print(f"✅ DeepFilterNet3 loaded (sample rate: {_df3_state.sr()} Hz)")
     return _df3_model, _df3_state
 
 
-def _enhance_audio_df3(
-    audio: np.ndarray,
-    sr: int,
-    mix_factor: float = 1.0,
-) -> np.ndarray:
-    """Denoise with DeepFilterNet3 (resamples 16 kHz ↔ 48 kHz internally)."""
+def _enhance_audio_df3(audio: np.ndarray, sr: int, mix_factor: float = 1.0) -> np.ndarray:
     if mix_factor <= 0.0:
         return audio
-
     import torch
     from scipy import signal as scipy_signal
-
     model, df_state = _load_df3_model()
-    target_sr: int = df_state.sr()  # 48 000
-
+    target_sr = df_state.sr()
     if sr != target_sr:
-        n_up    = int(round(len(audio) * target_sr / sr))
-        audio_up = scipy_signal.resample(audio, n_up).astype(np.float32)
+        audio_up = scipy_signal.resample(audio, int(round(len(audio) * target_sr / sr))).astype(np.float32)
     else:
         audio_up = audio.astype(np.float32)
-
     _patch_torchaudio_compat()
     from df import enhance as df_enhance
-
-    audio_tensor    = torch.from_numpy(audio_up).unsqueeze(0)  # (1, T)
-    enhanced_tensor = df_enhance(model, df_state, audio_tensor)
-    enhanced_up     = enhanced_tensor.squeeze(0).numpy().astype(np.float32)
-
-    if sr != target_sr:
-        enhanced = scipy_signal.resample(enhanced_up, len(audio)).astype(np.float32)
-    else:
-        enhanced = enhanced_up
-
-    if mix_factor >= 1.0:
-        return enhanced
-    return (mix_factor * enhanced + (1.0 - mix_factor) * audio).astype(np.float32)
+    enhanced_up = df_enhance(model, df_state, torch.from_numpy(audio_up).unsqueeze(0)).squeeze(0).numpy().astype(np.float32)
+    enhanced = scipy_signal.resample(enhanced_up, len(audio)).astype(np.float32) if sr != target_sr else enhanced_up
+    return enhanced if mix_factor >= 1.0 else (mix_factor * enhanced + (1.0 - mix_factor) * audio).astype(np.float32)
 
 
 # ── DPDFNet backend ───────────────────────────────────────────────────────────
 
-# Cache: model_name → tflite Interpreter
 _dpdfnet_interpreters: dict = {}
 
 
 def is_tflite_available() -> bool:
-    """Return True if tflite-runtime (or tensorflow) is importable."""
     import importlib.util
-    return (
-        importlib.util.find_spec("tflite_runtime") is not None
-        or importlib.util.find_spec("tensorflow") is not None
-    )
+    return (importlib.util.find_spec("tflite_runtime") is not None
+            or importlib.util.find_spec("tensorflow") is not None)
 
 
 def _tflite_interpreter(model_path: str):
-    """Load a TFLite Interpreter from a .tflite file."""
     try:
         import tflite_runtime.interpreter as tflite
         interp = tflite.Interpreter(model_path=model_path)
@@ -176,37 +159,27 @@ def _tflite_interpreter(model_path: str):
 
 
 def _load_dpdfnet_interpreter(model_name: str):
-    """Load and cache a DPDFNet TFLite interpreter."""
     if model_name in _dpdfnet_interpreters:
         return _dpdfnet_interpreters[model_name]
-
     filename = DPDFNET_ALL_MODELS.get(model_name)
     if filename is None:
         raise ValueError(f"Unknown DPDFNet model: {model_name!r}")
-
     model_path = os.path.join(DPDFNET_MODELS_DIR, filename)
     if not os.path.isfile(model_path):
         raise FileNotFoundError(
             f"DPDFNet model file not found: {model_path}\n"
-            f"  Download it with:\n"
-            f"    huggingface-cli download Ceva-IP/DPDFNet {filename} "
+            f"  Download: huggingface-cli download Ceva-IP/DPDFNet {filename} "
             f"--local-dir {DPDFNET_MODELS_DIR} --local-dir-use-symlinks False"
         )
-
     print(f"🔊 Loading DPDFNet '{model_name}' from {model_path} …")
     interp = _tflite_interpreter(model_path)
     _dpdfnet_interpreters[model_name] = interp
     in_shape = interp.get_input_details()[0]["shape"]
-    print(f"✅ DPDFNet '{model_name}' loaded (input shape: {in_shape})")
+    print(f"✅ DPDFNet '{model_name}' loaded (input shape: {list(in_shape)})")
     return interp
 
 
 def is_dpdfnet_model_available(model_name: str) -> bool:
-    """
-    Return True if the given DPDFNet model can be used:
-      - tflite-runtime or tensorflow is installed
-      - The .tflite file exists in DPDFNET_MODELS_DIR
-    """
     if not is_tflite_available():
         return False
     filename = DPDFNET_ALL_MODELS.get(model_name)
@@ -222,66 +195,110 @@ def _enhance_audio_dpdfnet(
     mix_factor: float = 1.0,
 ) -> np.ndarray:
     """
-    Denoise with a DPDFNet TFLite model.
+    Frequency-domain (STFT-based) frame-by-frame inference with DPDFNet.
 
-    16 kHz models (baseline/dpdfnet2/dpdfnet4/dpdfnet8) work directly with
-    our 16 kHz pipeline — no resampling.
+    The TFLite models are NOT time-domain: they consume one STFT frame at a
+    time and output the enhanced complex spectrum for that frame.
 
-    The 48 kHz model (dpdfnet2-48k) resamples 16 kHz → 48 kHz → 16 kHz.
+    Input tensor shape: [1, 1, freq_bins, 2]   (batch, ch, bins, real/imag)
+    Output tensor shape: same.
 
-    Frame-by-frame streaming inference with RNN state reset per file.
+    STFT parameters are derived from freq_bins:
+        n_fft    = (freq_bins - 1) * 2   e.g. 320 for 16 kHz models (161 bins)
+        hop_size = n_fft // 2            e.g. 160
+        window   = Hann
+
+    The model is stateful (RNN layers).  reset_all_variables() resets state at
+    the start of each file so batch calls remain independent.
     """
     if mix_factor <= 0.0:
         return audio
 
-    interp = _load_dpdfnet_interpreter(model_name)
+    from scipy import signal as scipy_signal
+
+    interp      = _load_dpdfnet_interpreter(model_name)
     in_details  = interp.get_input_details()
     out_details = interp.get_output_details()
 
-    # Determine whether to resample
+    # ── Derive STFT parameters from model input shape ─────────────────────
+    # Expected: [batch=1, ch=1, freq_bins, 2]
+    in_shape  = in_details[0]["shape"]   # e.g. [1, 1, 161, 2]
+    freq_bins = int(in_shape[2])
+    n_fft     = (freq_bins - 1) * 2     # 320 for 16kHz, 960 for 48kHz HR
+    hop_size  = n_fft // 2              # 160 / 480
+
+    # ── Resample to model's target SR if necessary ────────────────────────
     is_48k_model = model_name in DPDFNET_MODELS_48K
     target_sr    = 48000 if is_48k_model else 16000
 
     if sr != target_sr:
-        from scipy import signal as scipy_signal
         n_target   = int(round(len(audio) * target_sr / sr))
         proc_audio = scipy_signal.resample(audio, n_target).astype(np.float32)
     else:
         proc_audio = audio.astype(np.float32)
 
-    # Auto-detect frame size from model input tensor
-    in_shape   = in_details[0]["shape"]   # e.g. [1, 160] or [1, 480]
-    frame_size = int(in_shape[-1])
-    out_shape  = out_details[0]["shape"]
+    orig_proc_len = len(proc_audio)
 
-    # Pad to a multiple of frame_size
-    orig_len     = len(proc_audio)
-    remainder    = orig_len % frame_size
-    padded_audio = (
-        np.concatenate([proc_audio, np.zeros(frame_size - remainder, dtype=np.float32)])
-        if remainder else proc_audio
+    # ── STFT ─────────────────────────────────────────────────────────────
+    # Use a Hann window; boundary='zeros' avoids edge padding so the number of
+    # output frames is predictable and matches ISTFT exactly.
+    window = np.hanning(n_fft).astype(np.float32)
+
+    freqs, times, Zxx = scipy_signal.stft(
+        proc_audio,
+        fs=target_sr,
+        window=window,
+        nperseg=n_fft,
+        noverlap=n_fft - hop_size,
+        boundary=None,
+        padded=True,
     )
+    # Zxx: complex128, shape (freq_bins, n_frames)
+    n_frames = Zxx.shape[1]
 
-    # Reset RNN state (stateful model — state persists between invoke() calls
-    # within the same file; must be reset at the start of each new file)
-    interp.reset_all_variables()
+    # ── Frame-by-frame inference ─────────────────────────────────────────
+    interp.reset_all_variables()   # reset RNN state for this file
 
-    output_frames = []
-    for i in range(0, len(padded_audio), frame_size):
-        frame = padded_audio[i : i + frame_size].reshape(in_shape).astype(np.float32)
-        interp.set_tensor(in_details[0]["index"], frame)
+    enhanced_frames = np.zeros_like(Zxx)   # complex
+
+    for t in range(n_frames):
+        real = Zxx[:, t].real.astype(np.float32)
+        imag = Zxx[:, t].imag.astype(np.float32)
+
+        # shape → [1, 1, freq_bins, 2]
+        frame_in = np.stack([real, imag], axis=-1)[np.newaxis, np.newaxis, :, :]
+
+        interp.set_tensor(in_details[0]["index"], frame_in)
         interp.invoke()
-        out = interp.get_tensor(out_details[0]["index"]).flatten().copy()
-        output_frames.append(out)
 
-    enhanced_proc = np.concatenate(output_frames)[:orig_len]
+        out = interp.get_tensor(out_details[0]["index"])   # [1, 1, freq_bins, 2]
+        enhanced_frames[:, t] = out[0, 0, :, 0] + 1j * out[0, 0, :, 1]
 
-    # Resample back if needed
+    # ── iSTFT ─────────────────────────────────────────────────────────────
+    _, enhanced_proc = scipy_signal.istft(
+        enhanced_frames,
+        fs=target_sr,
+        window=window,
+        nperseg=n_fft,
+        noverlap=n_fft - hop_size,
+        boundary=None,
+    )
+    enhanced_proc = enhanced_proc.real.astype(np.float32)
+
+    # Trim / pad to match the processed-audio length exactly
+    if len(enhanced_proc) > orig_proc_len:
+        enhanced_proc = enhanced_proc[:orig_proc_len]
+    elif len(enhanced_proc) < orig_proc_len:
+        enhanced_proc = np.pad(enhanced_proc, (0, orig_proc_len - len(enhanced_proc)))
+
+    # ── Resample back to original SR ─────────────────────────────────────
     if sr != target_sr:
-        from scipy import signal as scipy_signal
         enhanced = scipy_signal.resample(enhanced_proc, len(audio)).astype(np.float32)
     else:
         enhanced = enhanced_proc
+
+    print(f"✅ DPDFNet '{model_name}' inference done "
+          f"({n_frames} frames, n_fft={n_fft}, hop={hop_size})")
 
     if mix_factor >= 1.0:
         return enhanced
@@ -291,7 +308,6 @@ def _enhance_audio_dpdfnet(
 # ── Unified public API ────────────────────────────────────────────────────────
 
 def is_model_available(model_name: str) -> bool:
-    """Return True if the given enhancement model can be used."""
     if model_name == DEEPFILTERNET3:
         return is_deepfilter_available()
     return is_dpdfnet_model_available(model_name)
@@ -301,14 +317,10 @@ def available_enhancement_models() -> list:
     """
     Return a list of (label, value) tuples for every enhancement model
     that is actually usable in the current environment.
-
-    Intended for building the Gradio dropdown choices.
     """
     models = []
-
     if is_deepfilter_available():
         models.append(("DeepFilterNet3 (48 kHz)", DEEPFILTERNET3))
-
     dpdfnet_labels = {
         "dpdfnet-baseline": "DPDFNet Baseline (16 kHz · fastest)",
         "dpdfnet-2":        "DPDFNet-2 (16 kHz · balanced)",
@@ -319,7 +331,6 @@ def available_enhancement_models() -> list:
     for key, label in dpdfnet_labels.items():
         if is_dpdfnet_model_available(key):
             models.append((label, key))
-
     return models
 
 
@@ -337,21 +348,14 @@ def enhance_audio(
     audio      : Mono float32 waveform at sample rate `sr`.
     sr         : Sample rate of `audio` (typically 16 000 Hz).
     mix_factor : 0.0 = original, 1.0 = fully enhanced.
-    model_name : One of DEEPFILTERNET3 or any key in DPDFNET_ALL_MODELS.
-
-    Returns
-    -------
-    np.ndarray — processed audio at the same sample rate and length.
+    model_name : DEEPFILTERNET3 or any key in DPDFNET_ALL_MODELS.
     """
     if mix_factor <= 0.0:
         return audio
-
     if model_name == DEEPFILTERNET3:
         return _enhance_audio_df3(audio, sr, mix_factor)
-
     if model_name in DPDFNET_ALL_MODELS:
         return _enhance_audio_dpdfnet(audio, sr, model_name, mix_factor)
-
     raise ValueError(
         f"Unknown enhancement model: {model_name!r}\n"
         f"Valid values: {DEEPFILTERNET3!r}, {list(DPDFNET_ALL_MODELS)}"
@@ -364,19 +368,12 @@ def enhance_file(
     mix_factor: float = 1.0,
     model_name: str = DEEPFILTERNET3,
 ) -> str:
-    """
-    Load `input_path`, enhance with the chosen model, write to `output_path`.
-
-    Returns `output_path`.
-    """
+    """Load `input_path`, enhance, write to `output_path`. Returns `output_path`."""
     import soundfile as sf
-
     audio, file_sr = sf.read(input_path, dtype="float32")
     if audio.ndim == 2:
         audio = audio.mean(axis=1)
-
     enhanced = enhance_audio(audio, file_sr, mix_factor=mix_factor, model_name=model_name)
-
     sf.write(output_path, enhanced, file_sr)
     logger.info("✅ Speech enhancement (%s) saved: %s", model_name, output_path)
     return output_path
