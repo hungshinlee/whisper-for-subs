@@ -280,9 +280,9 @@ def cleanup_old_files(max_age_hours: int = 24):
                 pass
     output_dir = "/app/outputs"
     if os.path.exists(output_dir):
-        for f in glob.glob(os.path.join(output_dir, "*.srt")) + \
-                 glob.glob(os.path.join(output_dir, "*.wav")) + \
-                 glob.glob(os.path.join(output_dir, "*.png")):
+        for f in (glob.glob(os.path.join(output_dir, "*.srt"))
+                  + glob.glob(os.path.join(output_dir, "*.wav"))
+                  + glob.glob(os.path.join(output_dir, "*.png"))):
             try:
                 if now - datetime.fromtimestamp(os.path.getmtime(f)) > timedelta(hours=max_age_hours):
                     os.unlink(f)
@@ -346,10 +346,8 @@ def _generate_spectrogram_png(
     title: str = "Spectrogram",
 ) -> str:
     """
-    Compute STFT, render a mel-style log-power spectrogram with a time axis
-    in seconds (matching the audio player timeline), and save to output_path.
-
-    Returns output_path.
+    Compute STFT, render a log-power spectrogram with a time axis in seconds
+    (matching the audio player timeline), and save to output_path.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -365,7 +363,7 @@ def _generate_spectrogram_png(
     )
     power_db = 20 * np.log10(np.maximum(np.abs(Zxx), 1e-10))
 
-    # Cap frequency axis at 8 kHz for speech (keeps the plot readable)
+    # Cap frequency axis at 8 kHz for speech readability
     freq_limit_hz = min(8000, freqs[-1])
     freq_mask     = freqs <= freq_limit_hz
     freqs_plot    = freqs[freq_mask]
@@ -374,10 +372,9 @@ def _generate_spectrogram_png(
     vmax = power_plot.max()
     vmin = vmax - 80  # 80 dB dynamic range
 
-    # Figure: wide enough so the time axis is easy to read
-    duration_s  = len(audio) / sr
-    fig_width   = max(10, min(20, duration_s * 0.6))
-    fig, ax = plt.subplots(figsize=(fig_width, 3.5), dpi=120)
+    duration_s = len(audio) / sr
+    fig_width  = max(10, min(20, duration_s * 0.6))
+    fig, ax    = plt.subplots(figsize=(fig_width, 3.5), dpi=120)
 
     pcm = ax.pcolormesh(
         times,
@@ -412,13 +409,13 @@ def _generate_spectrogram_png(
 #
 #  0  status_html          str / HTML
 #  1  asr_srt_text         str
-#  2  asr_srt_file         str | None   (file path)
-#  3  translated_col       gr.update    (visible)
+#  2  asr_srt_file         str | None
+#  3  translated_col       gr.update (visible)
 #  4  translated_srt_text  str
 #  5  translated_srt_file  str | None
-#  6  enhance_only_col     gr.update    (visible)
-#  7  enhanced_audio       str | None   (WAV file path for gr.Audio)
-#  8  spectrogram_image    str | None   (PNG file path for gr.Image)
+#  6  enhance_only_col     gr.update (visible)
+#  7  enhanced_audio       str | None  (WAV path for gr.Audio)
+#  8  spectrogram_image    str | None  (PNG path for gr.Image)
 # ═════════════════════════════════════════════════════════════════════════════
 
 _NO_TRANSLATE = (gr.update(visible=False), "", None)
@@ -426,12 +423,10 @@ _NO_ENHANCE   = (gr.update(visible=False), None, None)
 
 
 def _prog_asr(pct, msg):
-    """Yield-tuple for ASR mode progress (enhance_only_col stays hidden)."""
     return format_progress_html(pct, msg), "", None, *_NO_TRANSLATE, *_NO_ENHANCE
 
 
 def _prog_enh(pct, msg):
-    """Yield-tuple for enhance-only mode progress (ASR outputs stay empty)."""
     return format_progress_html(pct, msg), "", None, *_NO_TRANSLATE, *_NO_ENHANCE
 
 
@@ -439,21 +434,12 @@ def _prog_enh(pct, msg):
 # Input preparation — shared by both modes
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _prepare_input(
-    audio_file: Optional[str],
-    youtube_url: str,
-    session_dir: str,
-    prog_fn,
-) -> Generator:
+def _prepare_input(audio_file, youtube_url, session_dir, prog_fn):
     """
-    Shared generator that resolves the audio source to a local WAV path.
-
-    Yields progress tuples via prog_fn(pct, msg).
-    On success, the final yield is a 3-tuple: (audio_path, video_title, temp_files).
-    On failure, yields an error string and returns.
+    Resolve audio source → local WAV path.
+    Yields progress tuples, then a 3-tuple sentinel (audio_path, title, temp_files).
     """
-    temp_files = []
-    audio_path = None
+    temp_files  = []
     video_title = "output"
 
     if youtube_url and youtube_url.strip():
@@ -484,12 +470,12 @@ def _prepare_input(
         temp_files.append(audio_path)
 
     elif audio_file:
-        ext = os.path.splitext(audio_file)[1]
+        ext         = os.path.splitext(audio_file)[1]
         upload_copy = os.path.join(session_dir, f"upload_{uuid.uuid4().hex[:8]}{ext}")
         shutil.copy2(audio_file, upload_copy)
         temp_files.append(upload_copy)
         video_title = os.path.splitext(os.path.basename(audio_file))[0]
-        audio_path = _ensure_wav(upload_copy, session_dir)
+        audio_path  = _ensure_wav(upload_copy, session_dir)
         if audio_path != upload_copy:
             temp_files.append(audio_path)
         yield prog_fn(10, "Audio file loaded")
@@ -499,54 +485,42 @@ def _prepare_input(
         yield "❌ Please upload an audio file or enter a YouTube URL", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
         return
 
-    yield (audio_path, video_title, temp_files)   # sentinel — not a display tuple
+    yield (audio_path, video_title, temp_files)   # sentinel
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Enhance-Only pipeline
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _run_enhance_only(
-    audio_file: Optional[str],
-    youtube_url: str,
-    enhancement_model: str,
-    enhancement_mix: float,
-) -> Generator:
+def _run_enhance_only(audio_file, youtube_url, enhancement_model, enhancement_mix):
     session_id  = uuid.uuid4().hex[:12]
     session_dir = os.path.join("/tmp/whisper-sessions", session_id)
     os.makedirs(session_dir, exist_ok=True)
     temp_files  = []
+    start_time  = time.time()
 
     print(f"\n{'=' * 60}")
     print(f"🔊 Enhance-Only session: {session_id}")
     print(f"{'=' * 60}\n")
 
-    start_time = time.time()
-
     try:
-        # ── Input ────────────────────────────────────────────────────────
         result = None
         for item in _prepare_input(audio_file, youtube_url, session_dir, _prog_enh):
-            if isinstance(item, tuple) and len(item) == 3 and isinstance(item[0], str) \
-                    and not item[0].startswith("❌"):
-                # sentinel: (audio_path, video_title, prep_temp_files)
-                if os.path.isfile(item[0]):
-                    result = item
-                    temp_files.extend(item[2])
-                    break
-            yield item  # progress or error tuple
+            if (isinstance(item, tuple) and len(item) == 3
+                    and isinstance(item[0], str) and os.path.isfile(item[0])):
+                result = item
+                temp_files.extend(item[2])
+                break
+            yield item
 
         if result is None:
             return
 
         audio_path, video_title, _ = result
 
-        # ── Check model ──────────────────────────────────────────────────
         if not is_model_available(enhancement_model):
-            yield (
-                f"❌ Enhancement model '{enhancement_model}' is not available.",
-                "", None, *_NO_TRANSLATE, *_NO_ENHANCE,
-            )
+            yield (f"❌ Enhancement model '{enhancement_model}' is not available.",
+                   "", None, *_NO_TRANSLATE, *_NO_ENHANCE)
             return
 
         model_label = next(
@@ -554,51 +528,36 @@ def _run_enhance_only(
             enhancement_model,
         )
 
-        # ── Load audio for spectrogram ───────────────────────────────────
         raw_audio, file_sr = sf.read(audio_path, dtype="float32")
         if raw_audio.ndim == 2:
             raw_audio = raw_audio.mean(axis=1)
         audio_duration = len(raw_audio) / file_sr
         print(f"⏱️  Audio duration: {audio_duration:.1f}s")
 
-        # ── Enhance ──────────────────────────────────────────────────────
         yield _prog_enh(30, f"Enhancing speech ({model_label}, mix={enhancement_mix:.2f})…")
 
-        output_dir   = _get_output_dir()
-        safe          = _safe_title(video_title)
-        timestamp     = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id     = uuid.uuid4().hex[:6]
+        output_dir      = _get_output_dir()
+        safe            = _safe_title(video_title)
+        ts              = datetime.now().strftime("%Y%m%d_%H%M%S")
+        uid             = uuid.uuid4().hex[:6]
+        enhanced_wav    = os.path.join(output_dir, f"{safe}_enhanced_{ts}_{uid}.wav")
+        spectrogram_png = os.path.join(output_dir, f"{safe}_spectrogram_{ts}_{uid}.png")
 
-        enhanced_wav  = os.path.join(
-            output_dir, f"{safe}_enhanced_{timestamp}_{unique_id}.wav"
-        )
-        spectrogram_png = os.path.join(
-            output_dir, f"{safe}_spectrogram_{timestamp}_{unique_id}.png"
-        )
-
-        enhance_file(
-            audio_path,
-            enhanced_wav,
-            mix_factor=enhancement_mix,
-            model_name=enhancement_model,
-        )
+        enhance_file(audio_path, enhanced_wav,
+                     mix_factor=enhancement_mix, model_name=enhancement_model)
         print(f"💾 Enhanced audio saved: {enhanced_wav}")
 
-        # ── Spectrogram ──────────────────────────────────────────────────
         yield _prog_enh(80, "Generating spectrogram…")
 
-        enhanced_audio_np, enhanced_sr = sf.read(enhanced_wav, dtype="float32")
-        if enhanced_audio_np.ndim == 2:
-            enhanced_audio_np = enhanced_audio_np.mean(axis=1)
+        enh_np, enh_sr = sf.read(enhanced_wav, dtype="float32")
+        if enh_np.ndim == 2:
+            enh_np = enh_np.mean(axis=1)
 
         _generate_spectrogram_png(
-            enhanced_audio_np,
-            enhanced_sr,
-            spectrogram_png,
+            enh_np, enh_sr, spectrogram_png,
             title=f"Enhanced Spectrogram — {model_label}",
         )
 
-        # ── Done ─────────────────────────────────────────────────────────
         elapsed = time.time() - start_time
 
         badge_style = (
@@ -606,22 +565,19 @@ def _run_enhance_only(
             "background:#f0f7ff;border:1px solid #c7dff7;border-radius:8px;"
             "padding:6px 12px;margin:4px;font-size:14px;"
         )
-        label_s = "color:#555;font-weight:400;"
-        value_s = "color:#1565c0;font-weight:600;"
+        ls = "color:#555;font-weight:400;"
+        vs = "color:#1565c0;font-weight:600;"
 
-        def badge(icon, label, value):
-            return (
-                f'<span style="{badge_style}">'
-                f'{icon} <span style="{label_s}">{label}:</span>'
-                f'<span style="{value_s}">{value}</span>'
-                f'</span>'
-            )
+        def _badge(icon, label, value):
+            return (f'<span style="{badge_style}">'
+                    f'{icon} <span style="{ls}">{label}:</span>'
+                    f'<span style="{vs}">{value}</span></span>')
 
         badges = "".join([
-            badge("⏱️", "Audio",      f"{audio_duration:.1f}s"),
-            badge("⚡", "Processing", f"{elapsed:.1f}s"),
-            badge("🔊", "Model",      model_label),
-            badge("🎚️", "Mix",        f"{enhancement_mix:.2f}"),
+            _badge("⏱️", "Audio",      f"{audio_duration:.1f}s"),
+            _badge("⚡", "Processing", f"{elapsed:.1f}s"),
+            _badge("🔊", "Model",      model_label),
+            _badge("🎚️", "Mix",        f"{enhancement_mix:.2f}"),
         ])
         status_html = (
             '<div style="margin-bottom:6px;font-weight:600;color:#2e7d32;font-size:15px">'
@@ -630,23 +586,23 @@ def _run_enhance_only(
         )
 
         print(f"\n{'=' * 60}")
-        print(f"✅ Enhance-Only session done: {session_id}  ({elapsed:.1f}s)")
+        print(f"✅ Enhance-Only done: {session_id}  ({elapsed:.1f}s)")
         print(f"{'=' * 60}\n")
 
         yield (
             status_html,
-            "", None,                       # asr_srt_text, asr_srt_file
-            gr.update(visible=False),        # translated_col
-            "", None,                        # translated texts/files
-            gr.update(visible=True),         # enhance_only_col  ← show
-            enhanced_wav,                    # gr.Audio path
-            spectrogram_png,                 # gr.Image path
+            "", None,
+            gr.update(visible=False),
+            "", None,
+            gr.update(visible=True),   # enhance_only_col
+            enhanced_wav,
+            spectrogram_png,
         )
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"\n❌ Enhance-Only session failed: {session_id}\nError: {e}\n")
+        print(f"\n❌ Enhance-Only failed: {session_id}\nError: {e}\n")
         yield "❌ 增強失敗，請稍後再試。", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
 
     finally:
@@ -664,27 +620,16 @@ def _run_enhance_only(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ASR pipeline  (original process_audio, adapted to 9-tuple yields)
+# ASR pipeline
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _run_asr(
-    audio_file: Optional[str],
-    youtube_url: str,
-    model_size: str,
-    language: str,
-    task: str,
-    use_vad: bool,
-    min_silence_duration_s: float,
-    merge_subtitles: bool,
-    convert_to_traditional: bool,
-    max_chars: int,
-    translate_hakka: bool,
-    llm_system_prompt: str,
-    use_lexicon: bool,
-    use_enhancement: bool,
-    enhancement_model: str,
-    enhancement_mix: float,
-) -> Generator:
+    audio_file, youtube_url, model_size, language, task,
+    use_vad, min_silence_duration_s, merge_subtitles,
+    convert_to_traditional, max_chars, translate_hakka,
+    llm_system_prompt, use_lexicon,
+    use_enhancement, enhancement_model, enhancement_mix,
+):
     if language == "taigi":
         language = "zh"
         task = "transcribe"
@@ -697,26 +642,23 @@ def _run_asr(
     session_dir = os.path.join("/tmp/whisper-sessions", session_id)
     os.makedirs(session_dir, exist_ok=True)
 
-    start_time    = time.time()
-    temp_files    = []
-    audio_path    = None
-    audio_duration= 0.0
-    worker_id     = None
+    start_time     = time.time()
+    temp_files     = []
+    audio_duration = 0.0
+    worker_id      = None
 
     print(f"\n{'=' * 60}")
     print(f"🎦 ASR session: {session_id}")
     print(f"{'=' * 60}\n")
 
     try:
-        # ── Input ────────────────────────────────────────────────────────
         result = None
         for item in _prepare_input(audio_file, youtube_url, session_dir, _prog_asr):
-            if isinstance(item, tuple) and len(item) == 3 and isinstance(item[0], str) \
-                    and not item[0].startswith("❌"):
-                if os.path.isfile(item[0]):
-                    result = item
-                    temp_files.extend(item[2])
-                    break
+            if (isinstance(item, tuple) and len(item) == 3
+                    and isinstance(item[0], str) and os.path.isfile(item[0])):
+                result = item
+                temp_files.extend(item[2])
+                break
             yield item
 
         if result is None:
@@ -724,7 +666,7 @@ def _run_asr(
 
         audio_path, video_title, _ = result
 
-        # ── Speech Enhancement (optional) ────────────────────────────────
+        # ── Speech Enhancement ────────────────────────────────────────────
         if use_enhancement and enhancement_mix > 0.0:
             if not is_model_available(enhancement_model):
                 print(f"⚠️  Enhancement model '{enhancement_model}' not available — skipping")
@@ -739,11 +681,8 @@ def _run_asr(
                     f"enhanced_{uuid.uuid4().hex[:8]}{os.path.splitext(audio_path)[1]}",
                 )
                 try:
-                    enhance_file(
-                        audio_path, enhanced_path,
-                        mix_factor=enhancement_mix,
-                        model_name=enhancement_model,
-                    )
+                    enhance_file(audio_path, enhanced_path,
+                                 mix_factor=enhancement_mix, model_name=enhancement_model)
                     audio_path = enhanced_path
                     temp_files.append(enhanced_path)
                     print(f"✅ Enhancement applied: {enhancement_model}")
@@ -756,7 +695,7 @@ def _run_asr(
         except Exception as e:
             print(f"Warning: Could not get audio duration: {e}")
 
-        # ── VAD ──────────────────────────────────────────────────────────
+        # ── VAD ───────────────────────────────────────────────────────────
         vad_chunks = None
         if use_vad:
             yield _prog_asr(32, "Detecting speech segments with VAD...")
@@ -781,7 +720,6 @@ def _run_asr(
             model_size, use_vad, min_silence_duration_s
         )
         yield _prog_asr(40, f"Model loaded on GPU {worker_id}. Starting transcription...")
-        print(f"🔧 Using single-GPU transcriber on GPU {worker_id}")
 
         segments = trans.transcribe(
             audio_path,
@@ -798,10 +736,9 @@ def _run_asr(
             return
 
         print(f"📝 Generated {len(segments)} segments")
-        asr_segments = [seg.copy() for seg in segments]
-
-        is_hakka_model    = model_size in HAKKA_MODELS_IDS
-        do_translate      = translate_hakka and is_hakka_model and LLM_ENABLED
+        asr_segments        = [seg.copy() for seg in segments]
+        is_hakka_model      = model_size in HAKKA_MODELS_IDS
+        do_translate        = translate_hakka and is_hakka_model and LLM_ENABLED
         translated_segments = None
 
         if do_translate:
@@ -823,7 +760,6 @@ def _run_asr(
                 asr_segments = convert_segments_to_traditional(asr_segments)
                 if translated_segments is not None:
                     translated_segments = convert_segments_to_traditional(translated_segments)
-                print("✅ Converted to Traditional Chinese")
 
         if merge_subtitles:
             yield _prog_asr(90, "Merging subtitle segments...")
@@ -858,8 +794,8 @@ def _run_asr(
             "background:#f0f7ff;border:1px solid #c7dff7;border-radius:8px;"
             "padding:6px 12px;margin:4px;font-size:14px;"
         )
-        label_s = "color:#555;font-weight:400;"
-        value_s = "color:#1565c0;font-weight:600;"
+        ls = "color:#555;font-weight:400;"
+        vs = "color:#1565c0;font-weight:600;"
 
         metrics = [
             ("📝", "Segments",   str(len(asr_segments))),
@@ -869,9 +805,8 @@ def _run_asr(
         ]
         badges_html = "".join(
             f'<span style="{badge_style}">'
-            f'{icon} <span style="{label_s}">{label}:</span>'
-            f'<span style="{value_s}">{value}</span>'
-            f'</span>'
+            f'{icon} <span style="{ls}">{label}:</span>'
+            f'<span style="{vs}">{value}</span></span>'
             for icon, label, value in metrics if value is not None
         )
         status_html = (
@@ -881,25 +816,21 @@ def _run_asr(
         )
 
         print(f"\n{'=' * 60}")
-        print(f"✅ ASR session done: {session_id}  ({elapsed:.1f}s)")
+        print(f"✅ ASR done: {session_id}  ({elapsed:.1f}s)")
         print(f"{'=' * 60}\n")
 
         yield (
             status_html,
-            asr_srt_content,
-            asr_srt_path,
+            asr_srt_content, asr_srt_path,
             translated_col_update,
-            translated_srt_content,
-            translated_srt_path,
-            gr.update(visible=False),   # enhance_only_col stays hidden
-            None,                        # enhanced_audio
-            None,                        # spectrogram_image
+            translated_srt_content, translated_srt_path,
+            gr.update(visible=False), None, None,   # enhance_only_col stays hidden
         )
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"\n❌ ASR session failed: {session_id}\nError: {e}\n")
+        print(f"\n❌ ASR failed: {session_id}\nError: {e}\n")
         yield "❌ 處理失敗，請稍後再試。", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
 
     finally:
@@ -919,36 +850,19 @@ def _run_asr(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Unified dispatcher — wired to the Start button
+# Dispatcher
 # ═════════════════════════════════════════════════════════════════════════════
 
 def run(
-    mode: str,
-    # shared inputs
-    audio_file: Optional[str],
-    youtube_url: str,
-    # enhancement
-    use_enhancement: bool,
-    enhancement_model: str,
-    enhancement_mix: float,
-    # ASR-only inputs
-    model_size: str,
-    language: str,
-    task: str,
-    use_vad: bool,
-    min_silence_duration_s: float,
-    merge_subtitles: bool,
-    convert_to_traditional: bool,
-    max_chars: int,
-    translate_hakka: bool,
-    llm_system_prompt: str,
-    use_lexicon: bool,
-) -> Generator:
-    """Route to enhance-only or ASR pipeline based on `mode`."""
+    mode, audio_file, youtube_url,
+    use_enhancement, enhancement_model, enhancement_mix,
+    model_size, language, task,
+    use_vad, min_silence_duration_s, merge_subtitles,
+    convert_to_traditional, max_chars,
+    translate_hakka, llm_system_prompt, use_lexicon,
+):
     if mode == MODE_ENHANCE_ONLY:
-        yield from _run_enhance_only(
-            audio_file, youtube_url, enhancement_model, enhancement_mix,
-        )
+        yield from _run_enhance_only(audio_file, youtube_url, enhancement_model, enhancement_mix)
     else:
         yield from _run_asr(
             audio_file, youtube_url, model_size, language, task,
@@ -1011,7 +925,7 @@ def create_interface() -> gr.Blocks:
             )
 
         with gr.Row():
-            # ── Left column: Input & Settings ──────────────────────────
+            # ── Left: Input & Settings ──────────────────────────────────
             with gr.Column(scale=1):
                 gr.Markdown("### 📥 Input")
 
@@ -1029,7 +943,6 @@ def create_interface() -> gr.Blocks:
 
                 gr.Markdown("### ⚙️ Settings")
 
-                # ── Mode selector ───────────────────────────────────────
                 mode_radio = gr.Radio(
                     choices=[
                         ("🎙️ ASR (Transcribe)", MODE_ASR),
@@ -1043,7 +956,7 @@ def create_interface() -> gr.Blocks:
                     ),
                 )
 
-                # ── ASR settings (hidden in Enhance-Only mode) ──────────
+                # ── ASR settings ────────────────────────────────────────
                 with gr.Column(visible=True) as asr_settings_col:
                     default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
                     if default_model in TAIGI_MODELS_IDS:
@@ -1054,7 +967,8 @@ def create_interface() -> gr.Blocks:
                         init_model_value = default_model
                     else:
                         init_lang_sel    = "auto"
-                        init_model_value = default_model if default_model in GENERAL_MODELS_IDS else "large-v3-turbo"
+                        init_model_value = (default_model if default_model in GENERAL_MODELS_IDS
+                                            else "large-v3-turbo")
 
                     language_selector = gr.Radio(
                         choices=lang_choices,
@@ -1138,7 +1052,7 @@ def create_interface() -> gr.Blocks:
                         )
 
                 # ── Speech Enhancement ──────────────────────────────────
-                with gr.Column(visible=True) as enhancement_settings_col:
+                with gr.Column(visible=True):
                     use_enhancement_checkbox = gr.Checkbox(
                         value=False,
                         label="🔊 Speech Enhancement",
@@ -1171,13 +1085,12 @@ def create_interface() -> gr.Blocks:
 
                 process_btn = gr.Button("🚀 Start", variant="primary", size="lg")
 
-            # ── Right column: Output ────────────────────────────────────
+            # ── Right: Output ───────────────────────────────────────────
             with gr.Column(scale=1):
                 gr.Markdown("### 📤 Output")
 
                 status_text = gr.HTML("Waiting for input...")
 
-                # ── ASR output ──────────────────────────────────────────
                 with gr.Column(visible=True) as asr_output_col:
                     gr.Markdown("#### 🗣️ ASR Result")
                     asr_srt_output = gr.Textbox(
@@ -1202,7 +1115,6 @@ def create_interface() -> gr.Blocks:
                             trans_copy_status = gr.HTML("", elem_classes="copy-success")
                         translated_srt_file = gr.File(label="Download Translated SRT")
 
-                # ── Enhance-Only output ─────────────────────────────────
                 with gr.Column(visible=False) as enhance_only_col:
                     gr.Markdown("#### 🔊 Enhanced Audio")
                     enhanced_audio = gr.Audio(
@@ -1215,11 +1127,11 @@ def create_interface() -> gr.Blocks:
                         "<small>X-axis = time (seconds), aligned with the audio player above. "
                         "Y-axis = frequency (kHz). Colour = log power (dB).</small>"
                     )
+                    # show_download_button was added in Gradio 4.x — omit for compatibility
                     spectrogram_image = gr.Image(
                         label="Time-Aligned Spectrogram",
                         type="filepath",
                         interactive=False,
-                        show_download_button=True,
                     )
 
         # ── Event handlers ──────────────────────────────────────────────
@@ -1258,23 +1170,17 @@ def create_interface() -> gr.Blocks:
             ],
         )
 
-        # ── Mode radio: show/hide ASR vs Enhance-Only sections ──────────
         def on_mode_change(mode):
-            is_asr = (mode == MODE_ASR)
-            # In enhance-only mode, force enhancement checkbox on so the model
-            # dropdown and blend slider appear (they're needed as primary controls).
-            enh_checked = not is_asr
+            is_asr      = (mode == MODE_ASR)
+            enh_checked = not is_asr   # force-on in Enhance Only mode
             return (
-                gr.update(visible=is_asr),      # asr_settings_col
-                gr.update(visible=is_asr),      # asr_output_col
-                gr.update(visible=False),        # enhance_only_col (reset; shown after run)
-                gr.update(                       # use_enhancement_checkbox
-                    value=enh_checked,
-                    interactive=is_asr and SPEECH_ENHANCEMENT_AVAILABLE,
-                ),
-                # Show model dropdown + blend slider immediately in enhance-only mode
-                gr.update(visible=not is_asr and SPEECH_ENHANCEMENT_AVAILABLE),
-                gr.update(visible=not is_asr and SPEECH_ENHANCEMENT_AVAILABLE),
+                gr.update(visible=is_asr),       # asr_settings_col
+                gr.update(visible=is_asr),       # asr_output_col
+                gr.update(visible=False),         # enhance_only_col (reset)
+                gr.update(value=enh_checked,
+                          interactive=is_asr and SPEECH_ENHANCEMENT_AVAILABLE),
+                gr.update(visible=not is_asr and SPEECH_ENHANCEMENT_AVAILABLE),  # model dropdown
+                gr.update(visible=not is_asr and SPEECH_ENHANCEMENT_AVAILABLE),  # blend slider
             )
 
         mode_radio.change(
@@ -1291,23 +1197,16 @@ def create_interface() -> gr.Blocks:
             queue=False,
         )
 
-        # ── Language → update ASR model list ────────────────────────────
         def on_language_change(lang):
             if lang == "taigi":
-                model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in TAIGI_MODELS_IDS]
-                new_model = TAIGI_MODELS_IDS[0]
-                is_hakka  = False
+                mc, nm, is_hakka = [(MODEL_CONFIGS[m]["display_name"], m) for m in TAIGI_MODELS_IDS], TAIGI_MODELS_IDS[0], False
             elif lang == "hakka":
-                model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in HAKKA_MODELS_IDS]
-                new_model = HAKKA_MODELS_IDS[0]
-                is_hakka  = True
+                mc, nm, is_hakka = [(MODEL_CONFIGS[m]["display_name"], m) for m in HAKKA_MODELS_IDS], HAKKA_MODELS_IDS[0], True
             else:
-                model_choices = [(MODEL_CONFIGS[m]["display_name"], m) for m in GENERAL_MODELS_IDS]
-                new_model = "large-v3-turbo"
-                is_hakka  = False
+                mc, nm, is_hakka = [(MODEL_CONFIGS[m]["display_name"], m) for m in GENERAL_MODELS_IDS], "large-v3-turbo", False
             return (
-                gr.update(choices=model_choices, value=new_model),
-                _task_update_for_model(new_model),
+                gr.update(choices=mc, value=nm),
+                _task_update_for_model(nm),
                 gr.update(visible=is_hakka),
                 gr.update(value=is_hakka),
                 gr.update(visible=is_hakka),
@@ -1322,7 +1221,6 @@ def create_interface() -> gr.Blocks:
             queue=False,
         )
 
-        # ── Whisper model → update task list ────────────────────────────
         def on_model_change(model_name):
             is_hakka = model_name in HAKKA_MODELS_IDS
             return (
@@ -1341,7 +1239,6 @@ def create_interface() -> gr.Blocks:
             queue=False,
         )
 
-        # ── Enhancement checkbox → show/hide model dropdown & blend ─────
         def on_enhancement_toggle(checked):
             vis = checked and SPEECH_ENHANCEMENT_AVAILABLE
             return gr.update(visible=vis), gr.update(visible=vis)
@@ -1354,7 +1251,6 @@ def create_interface() -> gr.Blocks:
             show_progress="hidden",
         )
 
-        # ── Audio/YouTube mutual exclusion ───────────────────────────────
         audio_input.change(
             fn=lambda x: "" if x else gr.update(),
             inputs=[audio_input], outputs=[youtube_input], queue=False,
@@ -1364,7 +1260,6 @@ def create_interface() -> gr.Blocks:
             inputs=[youtube_input], outputs=[audio_input], queue=False,
         )
 
-        # ── VAD / merge checkbox → show/hide dependent sliders ───────────
         merge_checkbox.change(
             fn=lambda x: gr.update(visible=x),
             inputs=[merge_checkbox], outputs=[max_chars_slider], queue=False,
@@ -1374,7 +1269,6 @@ def create_interface() -> gr.Blocks:
             inputs=[use_vad_checkbox], outputs=[min_silence_slider], queue=False,
         )
 
-        # ── Copy buttons ─────────────────────────────────────────────────
         _COPY_JS = """(content) => {
             if (!content) return "⚠️ No content to copy";
             navigator.clipboard.writeText(content).then(
@@ -1386,7 +1280,6 @@ def create_interface() -> gr.Blocks:
         asr_copy_btn.click(fn=None, inputs=[asr_srt_output], outputs=[asr_copy_status], js=_COPY_JS)
         trans_copy_btn.click(fn=None, inputs=[translated_srt_output], outputs=[trans_copy_status], js=_COPY_JS)
 
-        # ── Examples ────────────────────────────────────────────────────
         gr.Markdown("### 📋 Examples")
         ground_truth_textbox = gr.Textbox(label="Ground Truth", interactive=False, lines=3)
         gr.Examples(
@@ -1436,9 +1329,9 @@ def main():
     output_dir = "/app/outputs"
     if os.path.exists(output_dir):
         try:
-            for f in glob.glob(os.path.join(output_dir, "*.srt")) + \
-                     glob.glob(os.path.join(output_dir, "*.wav")) + \
-                     glob.glob(os.path.join(output_dir, "*.png")):
+            for f in (glob.glob(os.path.join(output_dir, "*.srt"))
+                      + glob.glob(os.path.join(output_dir, "*.wav"))
+                      + glob.glob(os.path.join(output_dir, "*.png"))):
                 os.unlink(f)
             print(f"  ✓ Cleaned old outputs in {output_dir}")
         except Exception as e:
