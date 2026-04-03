@@ -74,6 +74,7 @@ services:
       --tensor-parallel-size ${VLLM_TENSOR_PARALLEL_SIZE:-2}
       --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.90}
       --max-model-len ${VLLM_MAX_MODEL_LEN:-4096}
+      --enforce-eager
     deploy:
       resources:
         reservations:
