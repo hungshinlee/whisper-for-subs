@@ -35,7 +35,7 @@ from chinese_converter import convert_segments_to_traditional, get_converter
 from hakka_translator import (
     translate_segments,
     is_llm_enabled,
-    check_vllm_ready,
+    pull_model_if_needed,
     load_lexicon,
     DEFAULT_SYSTEM_PROMPT,
 )
@@ -1289,10 +1289,10 @@ def main():
             print(f"  ⚠️  Failed to clean {output_dir}: {e}")
 
     if LLM_ENABLED:
-        print("🤖 LLM enabled — checking vLLM availability...")
-        check_vllm_ready()
+        print("🤖 LLM enabled — checking Ollama model availability...")
+        pull_model_if_needed()
     else:
-        print("ℹ️  LLM disabled (ENABLE_LLM=false) — skipping vLLM setup")
+        print("ℹ️  LLM disabled (ENABLE_LLM=false) — skipping Ollama setup")
 
     default_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
     if os.environ.get("PRELOAD_MODEL", "false").lower() == "true":

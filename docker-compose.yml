@@ -23,7 +23,7 @@ services:
       - ./.users:/app/.users:ro
     environment:
       # GPU 0-1 reserved for Whisper parallel transcription.
-      # GPU 2-3 reserved for vLLM (when ENABLE_LLM=true).
+      # GPU 2-3 reserved for Ollama LLM (when ENABLE_LLM=true).
       - CUDA_VISIBLE_DEVICES=0,1
       - GRADIO_SERVER_NAME=0.0.0.0
       - GRADIO_SERVER_PORT=7860
@@ -35,16 +35,16 @@ services:
       - HUGGINGFACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
       # LLM settings
       - ENABLE_LLM=${ENABLE_LLM:-false}
-      - VLLM_HOST=http://vllm:8000
-      - VLLM_MODEL=${VLLM_MODEL:-google/gemma-4-E4B-it}
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-gemma4:31b}
       # Private model IDs (set in .env, never committed)
       - HAKKA_V2_MODEL=${HAKKA_V2_MODEL:-}
       - HAKKA_V3_MODEL=${HAKKA_V3_MODEL:-}
       - TAIGI_MODEL=${TAIGI_MODEL:-}
     depends_on:
-      vllm:
+      ollama:
         condition: service_started
-        required: false   # App still starts normally if vLLM is not deployed
+        required: false   # App still starts normally if Ollama is not deployed
     deploy:
       resources:
         reservations:
@@ -54,37 +54,27 @@ services:
               capabilities: [gpu]
     shm_size: '16gb'
 
-  vllm:
-    # E4B (~8GB fp16) split across GPU 2+3 (22GB total) for comfortable fit with KV cache.
-    image: vllm/vllm-openai:gemma4
-    container_name: whisper-vllm
+  ollama:
+    image: ollama/ollama:latest
+    container_name: whisper-ollama
     restart: unless-stopped
     profiles:
       - llm   # Only deployed when: docker compose --profile llm up
     ports:
-      - "8000:8000"
+      - "11434:11434"
     volumes:
-      # Cache HuggingFace model weights — reused across container restarts
-      - vllm-models:/root/.cache/huggingface
+      - ollama-models:/root/.ollama
     environment:
-      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
-    command: >
-      --model ${VLLM_MODEL:-google/gemma-4-E4B-it}
-      --dtype float16
-      --tensor-parallel-size ${VLLM_TENSOR_PARALLEL_SIZE:-2}
-      --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.90}
-      --max-model-len ${VLLM_MAX_MODEL_LEN:-4096}
-      --enforce-eager
+      - OLLAMA_KEEP_ALIVE=24h
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['2', '3']   # GPU 2+3 for vLLM
+              device_ids: ['2', '3']   # GPU 2+3 for Ollama (gemma4:31b needs ~20GB)
               capabilities: [gpu]
-    shm_size: '16gb'
 
 volumes:
   whisper-models:
   torch-hub:
-  vllm-models:
+  ollama-models:
