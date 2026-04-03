@@ -10,7 +10,7 @@ torchaudio>=2.0.0
 gradio>=4.0.0
 
 # YouTube Download
-yt-dlp>=2024.1.1
+# yt-dlp removed — YouTube download feature has been removed
 
 # Audio Processing
 pydub>=0.25.1

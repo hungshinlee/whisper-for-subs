@@ -30,11 +30,6 @@ from transcriber import (
     MODEL_SIZES,
     MODEL_CONFIGS,
 )
-from youtube_downloader import (
-    is_youtube_url,
-    download_audio_with_progress,
-    get_video_info,
-)
 from srt_utils import segments_to_srt, merge_segments
 from chinese_converter import convert_segments_to_traditional, get_converter
 from hakka_translator import (
@@ -269,7 +264,7 @@ transcriber_pool = TranscriberPool()
 
 def cleanup_old_files(max_age_hours: int = 24):
     now = datetime.now()
-    for tmp_dir in ["/tmp/whisper-downloads", "/tmp/whisper-sessions"]:
+    for tmp_dir in ["/tmp/whisper-sessions"]:
         if not os.path.exists(tmp_dir):
             continue
         for f in glob.glob(os.path.join(tmp_dir, "*")):
@@ -434,55 +429,27 @@ def _prog_enh(pct, msg):
 # Input preparation — shared by both modes
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _prepare_input(audio_file, youtube_url, session_dir, prog_fn):
+def _prepare_input(audio_file, prog_fn):
     """
-    Resolve audio source → local WAV path.
+    Resolve uploaded audio file → local WAV path.
     Yields progress tuples, then a 3-tuple sentinel (audio_path, title, temp_files).
     """
     temp_files  = []
     video_title = "output"
 
-    if youtube_url and youtube_url.strip():
-        if not is_youtube_url(youtube_url):
-            yield "❌ Invalid YouTube URL", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
-            return
-
-        yield prog_fn(5, "Fetching video information...")
-        info = get_video_info(youtube_url)
-        if info:
-            video_title = info.get("title", "youtube_audio")
-            yield prog_fn(10, f"Downloading: {video_title[:40]}...")
-
-        download_dir = os.path.join(session_dir, "downloads")
-        os.makedirs(download_dir, exist_ok=True)
-
-        audio_path, title = download_audio_with_progress(
-            youtube_url, output_dir=download_dir, progress_callback=None,
-        )
-        yield prog_fn(30, "Download complete")
-
-        if audio_path is None:
-            yield "❌ Download failed. Please check the URL.", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
-            return
-
-        if title:
-            video_title = title
-        temp_files.append(audio_path)
-
-    elif audio_file:
+    if audio_file:
         ext         = os.path.splitext(audio_file)[1]
-        upload_copy = os.path.join(session_dir, f"upload_{uuid.uuid4().hex[:8]}{ext}")
+        upload_copy = os.path.join(tempfile.mkdtemp(), f"upload_{uuid.uuid4().hex[:8]}{ext}")
         shutil.copy2(audio_file, upload_copy)
         temp_files.append(upload_copy)
         video_title = os.path.splitext(os.path.basename(audio_file))[0]
-        audio_path  = _ensure_wav(upload_copy, session_dir)
+        audio_path  = _ensure_wav(upload_copy, os.path.dirname(upload_copy))
         if audio_path != upload_copy:
             temp_files.append(audio_path)
         yield prog_fn(10, "Audio file loaded")
         print(f"📁 Session audio: {audio_path}")
-
     else:
-        yield "❌ Please upload an audio file or enter a YouTube URL", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
+        yield "❌ Please upload an audio file", "", None, *_NO_TRANSLATE, *_NO_ENHANCE
         return
 
     yield (audio_path, video_title, temp_files)   # sentinel
@@ -492,7 +459,7 @@ def _prepare_input(audio_file, youtube_url, session_dir, prog_fn):
 # Enhance-Only pipeline
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _run_enhance_only(audio_file, youtube_url, enhancement_model, enhancement_mix):
+def _run_enhance_only(audio_file, enhancement_model, enhancement_mix):
     session_id  = uuid.uuid4().hex[:12]
     session_dir = os.path.join("/tmp/whisper-sessions", session_id)
     os.makedirs(session_dir, exist_ok=True)
@@ -505,7 +472,7 @@ def _run_enhance_only(audio_file, youtube_url, enhancement_model, enhancement_mi
 
     try:
         result = None
-        for item in _prepare_input(audio_file, youtube_url, session_dir, _prog_enh):
+        for item in _prepare_input(audio_file, _prog_enh):
             if (isinstance(item, tuple) and len(item) == 3
                     and isinstance(item[0], str) and os.path.isfile(item[0])):
                 result = item
@@ -624,7 +591,7 @@ def _run_enhance_only(audio_file, youtube_url, enhancement_model, enhancement_mi
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _run_asr(
-    audio_file, youtube_url, model_size, language, task,
+    audio_file, model_size, language, task,
     use_vad, min_silence_duration_s, merge_subtitles,
     convert_to_traditional, max_chars, translate_hakka,
     llm_system_prompt, use_lexicon,
@@ -653,7 +620,7 @@ def _run_asr(
 
     try:
         result = None
-        for item in _prepare_input(audio_file, youtube_url, session_dir, _prog_asr):
+        for item in _prepare_input(audio_file, _prog_asr):
             if (isinstance(item, tuple) and len(item) == 3
                     and isinstance(item[0], str) and os.path.isfile(item[0])):
                 result = item
@@ -854,7 +821,7 @@ def _run_asr(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def run(
-    mode, audio_file, youtube_url,
+    mode, audio_file,
     use_enhancement, enhancement_model, enhancement_mix,
     model_size, language, task,
     use_vad, min_silence_duration_s, merge_subtitles,
@@ -862,10 +829,10 @@ def run(
     translate_hakka, llm_system_prompt, use_lexicon,
 ):
     if mode == MODE_ENHANCE_ONLY:
-        yield from _run_enhance_only(audio_file, youtube_url, enhancement_model, enhancement_mix)
+        yield from _run_enhance_only(audio_file, enhancement_model, enhancement_mix)
     else:
         yield from _run_asr(
-            audio_file, youtube_url, model_size, language, task,
+            audio_file, model_size, language, task,
             use_vad, min_silence_duration_s, merge_subtitles,
             convert_to_traditional, max_chars, translate_hakka,
             llm_system_prompt, use_lexicon,
@@ -933,12 +900,6 @@ def create_interface() -> gr.Blocks:
                     label="Upload Audio or Video",
                     type="filepath",
                     sources=["upload", "microphone"],
-                )
-                gr.Markdown("**OR**")
-                youtube_input = gr.Textbox(
-                    label="YouTube URL",
-                    placeholder="https://www.youtube.com/watch?v=...",
-                    value="https://www.youtube.com/watch?v=Z-RUXs5YOyE",
                 )
 
                 gr.Markdown("### ⚙️ Settings")
@@ -1141,7 +1102,6 @@ def create_interface() -> gr.Blocks:
             inputs=[
                 mode_radio,
                 audio_input,
-                youtube_input,
                 use_enhancement_checkbox,
                 enhancement_model_dropdown,
                 enhancement_mix_slider,
@@ -1251,15 +1211,6 @@ def create_interface() -> gr.Blocks:
             show_progress="hidden",
         )
 
-        audio_input.change(
-            fn=lambda x: "" if x else gr.update(),
-            inputs=[audio_input], outputs=[youtube_input], queue=False,
-        )
-        youtube_input.change(
-            fn=lambda x: None if x else gr.update(),
-            inputs=[youtube_input], outputs=[audio_input], queue=False,
-        )
-
         merge_checkbox.change(
             fn=lambda x: gr.update(visible=x),
             inputs=[merge_checkbox], outputs=[max_chars_slider], queue=False,
@@ -1318,7 +1269,7 @@ def main():
         print("ℹ️  No speech enhancement backend installed")
 
     print("🧹 Cleaning up temporary files...")
-    for path in ["/tmp/whisper-downloads", "/tmp/whisper-sessions"]:
+    for path in ["/tmp/whisper-sessions"]:
         if os.path.exists(path):
             try:
                 shutil.rmtree(path)
