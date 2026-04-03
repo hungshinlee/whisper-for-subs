@@ -121,13 +121,13 @@ def build_lexicon_hint(texts: List[str], lexicon: "_LexiconIndex") -> str:
 # Default system prompt — also used as the UI placeholder / default value
 DEFAULT_SYSTEM_PROMPT = (
     "你是一位專業的臺灣客語翻譯員。"
-    "使用者會提供客語漢字，請將每一句翻譯成自然流暢的繁體中文（臺灣用語）。"
+    "使用者會提供以換行分隔的客語漢字，請將每一句翻譯成自然流暢的繁體中文（臺灣用語）。\n"
     "規則：\n"
     "1. 只輸出翻譯結果，不要解釋，適當地加上標點符號（逗號或句號）。\n"
     "2. 保持與原文相近的句子長度。\n"
     "3. 若原文已是繁體中文，則原文照傳回。\n"
-    "4. 一行輸入對應一行輸出，行數必須完全相同。\n"
-    "5. 若提供了【客華詞彙對照表】，總譯時必須優先採用其中的詞彙，非必要時才可依上下文微調。"
+    "4. 一行輸入對應一行輸出，行數必須完全相同，不可增減、不可加編號或符號。\n"
+    "5. 若提供了【客華詞彙對照表】，翻譯時必須優先採用其中的詞彙，非必要時才可依上下文微調。"
 )
 
 
@@ -163,6 +163,10 @@ def _call_ollama(system_prompt: str, user_content: str) -> Optional[str]:
     """
     Single raw call to Ollama chat API.
     Returns the assistant's reply string, or None on failure.
+
+    think=False explicitly disables Gemma 4's thinking mode via Ollama's
+    top-level parameter. Even so, 26B/31B models may still emit an empty
+    thought block (<|channel>thought\n<channel|>); _strip_thinking() removes it.
     """
     payload = {
         "model": OLLAMA_MODEL,
@@ -171,6 +175,7 @@ def _call_ollama(system_prompt: str, user_content: str) -> Optional[str]:
             {"role": "user",   "content": user_content},
         ],
         "stream": False,
+        "think": False,
         "options": {
             "temperature": 0.1,
             "num_predict": 512,
@@ -183,10 +188,21 @@ def _call_ollama(system_prompt: str, user_content: str) -> Optional[str]:
             timeout=OLLAMA_TIMEOUT,
         )
         resp.raise_for_status()
-        return resp.json()["message"]["content"].strip()
+        content = resp.json()["message"]["content"]
+        return _strip_thinking(content).strip()
     except Exception as e:
         print(f"❌ Ollama call error: {e}")
         return None
+
+
+def _strip_thinking(text: str) -> str:
+    """
+    Remove Gemma 4 thought blocks from the response.
+    Even with think=False, 31B/26B models may emit empty blocks:
+      <|channel>thought\n<channel|>
+    This regex strips both empty and non-empty thought blocks.
+    """
+    return re.sub(r"<\|channel>thought\n.*?<channel\|>", "", text, flags=re.DOTALL).strip()
 
 
 def _translate_one(text: str, system_prompt: str) -> str:
