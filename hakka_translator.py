@@ -17,7 +17,7 @@ import requests
 # vLLM service endpoint — resolved via Docker internal DNS when running in compose
 VLLM_HOST = os.environ.get("VLLM_HOST", "http://vllm:8000")
 # Full HuggingFace model ID, must match the --model argument passed to vLLM at startup
-VLLM_MODEL = os.environ.get("VLLM_MODEL", "google/gemma-4-27b-it")
+VLLM_MODEL = os.environ.get("VLLM_MODEL", "google/gemma-4-26B-A4B-it")
 
 # Timeout per API call.
 # Batch calls may take longer than single-line calls, so set generously.

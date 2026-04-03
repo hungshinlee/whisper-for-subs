@@ -36,7 +36,7 @@ services:
       # LLM settings
       - ENABLE_LLM=${ENABLE_LLM:-false}
       - VLLM_HOST=http://vllm:8000
-      - VLLM_MODEL=${VLLM_MODEL:-google/gemma-4-27b-it}
+      - VLLM_MODEL=${VLLM_MODEL:-google/gemma-4-26B-A4B-it}
       # Private model IDs (set in .env, never committed)
       - HAKKA_V2_MODEL=${HAKKA_V2_MODEL:-}
       - HAKKA_V3_MODEL=${HAKKA_V3_MODEL:-}
@@ -71,7 +71,7 @@ services:
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
     command: >
-      --model ${VLLM_MODEL:-google/gemma-4-27b-it}
+      --model ${VLLM_MODEL:-google/gemma-4-26B-A4B-it}
       --dtype float16
       --tensor-parallel-size ${VLLM_TENSOR_PARALLEL_SIZE:-2}
       --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.90}
