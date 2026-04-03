@@ -1,8 +1,10 @@
 """
-Hakka-to-Mandarin translation module using a local Ollama LLM.
+Hakka-to-Mandarin translation module using a local vLLM server.
 
 Translates Hakka Chinese characters (客語漢字) to Traditional Mandarin Chinese (繁體中文).
 Only active when ENABLE_LLM=true is set in the environment.
+
+vLLM exposes an OpenAI-compatible REST API at /v1/chat/completions.
 """
 
 import os
@@ -12,19 +14,20 @@ from collections import defaultdict
 from typing import List, Dict, Optional
 import requests
 
-# Ollama service endpoint — resolved via Docker internal DNS when running in compose
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
+# vLLM service endpoint — resolved via Docker internal DNS when running in compose
+VLLM_HOST = os.environ.get("VLLM_HOST", "http://vllm:8000")
+# Full HuggingFace model ID, must match the --model argument passed to vLLM at startup
+VLLM_MODEL = os.environ.get("VLLM_MODEL", "google/gemma-4-27b-it")
 
 # Timeout per API call.
 # Batch calls may take longer than single-line calls, so set generously.
-OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "300"))  # seconds
+VLLM_TIMEOUT = int(os.environ.get("VLLM_TIMEOUT", "300"))  # seconds
 
 # Number of lines per batch. 5 is the sweet spot:
 # - Fast enough (~4x vs line-by-line)
-# - Small enough that Gemma 3 rarely merges lines
+# - Small enough that the model rarely merges lines
 # - Easy to retry individually on mismatch
-BATCH_SIZE = int(os.environ.get("OLLAMA_BATCH_SIZE", "5"))
+BATCH_SIZE = int(os.environ.get("VLLM_BATCH_SIZE", "5"))
 
 # Path to the Hakka–Mandarin lexicon CSV (relative to working dir or absolute)
 LEXICON_PATH = os.environ.get(
@@ -136,56 +139,55 @@ def is_llm_enabled() -> bool:
     return os.environ.get("ENABLE_LLM", "false").lower() == "true"
 
 
-def check_ollama_available() -> bool:
+def check_vllm_available() -> bool:
     """
-    Ping the Ollama service to verify it's reachable and the model is loaded.
+    Ping the vLLM service to verify it's reachable and the expected model is loaded.
+    Uses the OpenAI-compatible GET /v1/models endpoint.
     Returns False gracefully if anything fails.
     """
     try:
-        resp = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
+        resp = requests.get(f"{VLLM_HOST}/v1/models", timeout=5)
         if resp.status_code != 200:
+            print(f"⚠️  vLLM /v1/models returned HTTP {resp.status_code}")
             return False
-        models = [m["name"] for m in resp.json().get("models", [])]
-        model_base = OLLAMA_MODEL.split(":")[0]
-        available = any(model_base in m for m in models)
+        model_ids = [m["id"] for m in resp.json().get("data", [])]
+        available = VLLM_MODEL in model_ids
         if not available:
             print(
-                f"⚠️  Ollama is running but model '{OLLAMA_MODEL}' is not loaded. "
-                f"Available: {models}"
+                f"⚠️  vLLM is running but model '{VLLM_MODEL}' is not loaded. "
+                f"Available: {model_ids}"
             )
         return available
     except Exception as e:
-        print(f"⚠️  Ollama not reachable at {OLLAMA_HOST}: {e}")
+        print(f"⚠️  vLLM not reachable at {VLLM_HOST}: {e}")
         return False
 
 
-def _call_ollama(system_prompt: str, user_content: str) -> Optional[str]:
+def _call_vllm(system_prompt: str, user_content: str) -> Optional[str]:
     """
-    Single raw call to Ollama chat API.
+    Single raw call to the vLLM OpenAI-compatible chat completions API.
     Returns the assistant's reply string, or None on failure.
     """
     payload = {
-        "model": OLLAMA_MODEL,
+        "model": VLLM_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_content},
         ],
         "stream": False,
-        "options": {
-            "temperature": 0.1,
-            "num_predict": 512,
-        },
+        "temperature": 0.1,
+        "max_tokens": 512,
     }
     try:
         resp = requests.post(
-            f"{OLLAMA_HOST}/api/chat",
+            f"{VLLM_HOST}/v1/chat/completions",
             json=payload,
-            timeout=OLLAMA_TIMEOUT,
+            timeout=VLLM_TIMEOUT,
         )
         resp.raise_for_status()
-        return resp.json()["message"]["content"].strip()
+        return resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        print(f"❌ Ollama call error: {e}")
+        print(f"❌ vLLM call error: {e}")
         return None
 
 
@@ -194,7 +196,7 @@ def _translate_one(text: str, system_prompt: str) -> str:
     Translate a single line. Falls back to original text on failure.
     Only the first non-empty reply line is used to avoid stray commentary.
     """
-    reply = _call_ollama(system_prompt, text)
+    reply = _call_vllm(system_prompt, text)
     if reply is None:
         return text
     first_line = next(
@@ -220,7 +222,7 @@ def _translate_batch(texts: List[str], system_prompt: str) -> List[str]:
     if len(texts) == 1:
         return [_translate_one(texts[0], system_prompt)]
 
-    reply = _call_ollama(system_prompt, "\n".join(texts))
+    reply = _call_vllm(system_prompt, "\n".join(texts))
 
     if reply is not None:
         lines = [l for l in reply.splitlines() if l.strip()]
@@ -272,8 +274,8 @@ def translate_segments(
         print("ℹ️  LLM translation disabled (ENABLE_LLM != true)")
         return segments
 
-    if not check_ollama_available():
-        print("⚠️  Ollama unavailable — skipping translation, keeping original text")
+    if not check_vllm_available():
+        print("⚠️  vLLM unavailable — skipping translation, keeping original text")
         return segments
 
     effective_prompt = (system_prompt or "").strip() or DEFAULT_SYSTEM_PROMPT
@@ -291,7 +293,7 @@ def translate_segments(
     print(
         f"🈯 Starting Hakka → Mandarin translation "
         f"({total} segments, batch_size={batch_size}, "
-        f"{total_batches} batches, timeout={OLLAMA_TIMEOUT}s)..."
+        f"{total_batches} batches, timeout={VLLM_TIMEOUT}s)..."
     )
 
     translated_segments = [seg.copy() for seg in segments]
@@ -325,37 +327,20 @@ def translate_segments(
     return translated_segments
 
 
-def pull_model_if_needed():
+def check_vllm_ready():
     """
-    Pull the Ollama model if it hasn't been downloaded yet.
-    Called once at startup.
+    Verify vLLM is reachable and the expected model is loaded.
+    Called once at startup. Unlike Ollama, vLLM downloads the model
+    at container start via the --model flag — no pull step needed here.
     """
     if not is_llm_enabled():
         return
 
-    try:
-        resp = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=10)
-        if resp.status_code != 200:
-            print("⚠️  Could not reach Ollama to check model status")
-            return
-
-        models = [m["name"] for m in resp.json().get("models", [])]
-        model_base = OLLAMA_MODEL.split(":")[0]
-
-        if any(model_base in m for m in models):
-            print(f"✅ Ollama model '{OLLAMA_MODEL}' already available")
-            return
-
-        print(f"📥 Pulling Ollama model '{OLLAMA_MODEL}'... (this may take a while)")
-        pull_resp = requests.post(
-            f"{OLLAMA_HOST}/api/pull",
-            json={"name": OLLAMA_MODEL, "stream": False},
-            timeout=600,
+    print(f"🤖 Checking vLLM availability at {VLLM_HOST} (model: {VLLM_MODEL})...")
+    if check_vllm_available():
+        print(f"✅ vLLM model '{VLLM_MODEL}' is ready")
+    else:
+        print(
+            f"⚠️  vLLM not ready. Ensure the vLLM container has started and "
+            f"--model {VLLM_MODEL} is specified in docker-compose.yml."
         )
-        if pull_resp.status_code == 200:
-            print(f"✅ Model '{OLLAMA_MODEL}' pulled successfully")
-        else:
-            print(f"❌ Failed to pull model: {pull_resp.text}")
-
-    except Exception as e:
-        print(f"⚠️  Model pull failed: {e}")
