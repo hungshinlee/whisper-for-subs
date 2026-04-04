@@ -13,18 +13,19 @@ Production-grade ASR service built on [faster-whisper](https://github.com/guilla
 ## Table of Contents
 
 1. [Architecture Overview](#1-architecture-overview)
-2. [Audio Processing Pipeline](#2-audio-processing-pipeline)
-3. [Hallucination Filtering](#3-hallucination-filtering)
-4. [Multi-GPU Scheduling — TranscriberPool](#4-multi-gpu-scheduling--transcriberpool)
-5. [Model Management](#5-model-management)
-6. [Hakka Translation Pipeline](#6-hakka-translation-pipeline)
-7. [Supported Models](#7-supported-models)
-8. [Environment Variables](#8-environment-variables)
-9. [Deployment](#9-deployment)
-10. [API Reference](#10-api-reference)
-11. [Project Structure](#11-project-structure)
-12. [Hardware Requirements](#12-hardware-requirements)
-13. [Acknowledgements](#13-acknowledgements)
+2. [Operating Modes](#2-operating-modes)
+3. [Audio Processing Pipeline](#3-audio-processing-pipeline)
+4. [Hallucination Filtering](#4-hallucination-filtering)
+5. [Multi-GPU Scheduling — TranscriberPool](#5-multi-gpu-scheduling--transcriberpool)
+6. [Model Management](#6-model-management)
+7. [Hakka Translation Pipeline](#7-hakka-translation-pipeline)
+8. [Supported Models](#8-supported-models)
+9. [Environment Variables](#9-environment-variables)
+10. [Deployment](#10-deployment)
+11. [API Reference](#11-api-reference)
+12. [Project Structure](#12-project-structure)
+13. [Hardware Requirements](#13-hardware-requirements)
+14. [Acknowledgements](#14-acknowledgements)
 
 ---
 
@@ -40,10 +41,13 @@ Production-grade ASR service built on [faster-whisper](https://github.com/guilla
 │  │  Transcriber │  │  Transcriber │  │  Transcriber │          │
 │  └──────────────┘  └──────────────┘  └──────────────┘          │
 │                                                                 │
-│  Per-request pipeline                                           │
+│  Per-request pipeline (ASR mode)                                │
 │  Input → Enhancement → VAD → Whisper → Filters → SRT           │
 │                    ↓                                            │
 │             [Optional] Ollama LLM (Hakka → Mandarin)           │
+│                                                                 │
+│  Per-request pipeline (Enhance Only mode)                       │
+│  Input → Enhancement → Enhanced WAV + Spectrogram               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -51,33 +55,47 @@ The application is a single Python process. Gradio's built-in queue handles HTTP
 
 ---
 
-## 2. Audio Processing Pipeline
+## 2. Operating Modes
 
-Every request runs the following stages in order.
+The UI exposes a **Mode** radio at the top of the Settings panel with two options:
 
-### 2.1 Format Normalisation
+| Mode | Description | Output |
+|------|-------------|--------|
+| **🎙️ ASR (Transcribe)** | Full pipeline: enhance → VAD → Whisper → SRT | SRT subtitle file(s) |
+| **🔊 Enhance Only** | Speech enhancement only | Enhanced WAV + time-aligned spectrogram PNG |
 
-Uploaded files and YouTube downloads are normalised to **mono WAV at 16 kHz** before any processing:
+Enhance Only mode is useful for previewing the effect of noise suppression before committing to a full transcription run. The spectrogram X-axis is aligned with the audio player for easy comparison.
 
-- Containers that `soundfile` cannot decode directly (MP3, AAC, M4A, OGG, OPUS, WMA, AMR) are converted via `ffmpeg -ar 16000 -ac 1`.
-- YouTube audio is downloaded with `yt-dlp` using `FFmpegExtractAudio` post-processor, also targeting 16 kHz mono WAV.
+---
 
-### 2.2 Speech Enhancement (optional)
+## 3. Audio Processing Pipeline
 
-When enabled, [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet) suppresses background noise before VAD and transcription.
+Every ASR request runs the following stages in order.
 
-**Implementation details (`speech_enhancer.py`):**
+### 3.1 Format Normalisation
 
-- DeepFilterNet3 operates natively at **48 kHz**. The 16 kHz input is upsampled via `scipy.signal.resample`, processed, then downsampled back.
-- The model is loaded lazily (first call only) and cached for the process lifetime.
-- A `mix_factor` parameter (0.0–1.0) blends the enhanced and original signals:
-  ```
-  output = mix_factor × enhanced + (1 − mix_factor) × original
-  ```
-- The DeepFilterNet3 weights (~30 MB) are **baked into the Docker image** at build time (`preload_deepfilter.py`) so runtime inference never requires network access.
-- `is_deepfilter_available()` uses `importlib.util.find_spec("df")` — no import cost, safe to call at module load time.
+Uploaded files are normalised to **mono WAV at 16 kHz** before any processing. Containers that `soundfile` cannot decode directly (MP3, AAC, M4A, OGG, OPUS, WMA, AMR) are converted via `ffmpeg -ar 16000 -ac 1`.
 
-### 2.3 Voice Activity Detection
+### 3.2 Speech Enhancement (optional)
+
+Two enhancement backends are available, selectable via the UI:
+
+**DeepFilterNet3** (`speech_enhancer.py`):
+- Operates natively at **48 kHz**. The 16 kHz input is upsampled via `scipy.signal.resample`, processed, then downsampled back.
+- Model loaded lazily (first call only) and cached for the process lifetime.
+- Weights (~30 MB) are **baked into the Docker image** at build time (`preload_deepfilter.py`).
+
+**DPDFNet** (TFLite-based, causal, 16 kHz):
+- Four quality tiers: Baseline (fastest), 2, 4, 8 (best).
+- Runs at native 16 kHz — no resampling required.
+- Weights downloaded from HuggingFace at build time (`preload_dpdfnet.py`).
+
+Both backends support a `mix_factor` parameter (0.0–1.0) that blends the enhanced and original signals:
+```
+output = mix_factor × enhanced + (1 − mix_factor) × original
+```
+
+### 3.3 Voice Activity Detection
 
 [Silero VAD](https://github.com/snakers4/silero-vad) segments the audio into speech chunks before Whisper inference. This step runs **after** speech enhancement so the detector always operates on clean audio.
 
@@ -96,7 +114,7 @@ After raw detection, `merge_short_segments()` applies secondary merging:
 
 The VAD model itself (`snakers4/silero-vad`) is downloaded once during Docker build and cached in a named volume.
 
-### 2.4 Whisper Inference
+### 3.4 Whisper Inference
 
 Each VAD chunk is written to a temporary WAV file and passed to `WhisperModel.transcribe()` with `vad_filter=False` (VAD is already applied above). The model returns a lazy generator; segments are consumed and collected into dicts:
 
@@ -112,23 +130,23 @@ Each VAD chunk is written to a temporary WAV file and passed to `WhisperModel.tr
 
 Chunk timestamps are offset by `chunk_start` so all segments share a common absolute timeline.
 
-### 2.5 Post-processing
+### 3.5 Post-processing
 
-After transcription, segments pass through three hallucination filters (see §3), then optionally:
+After transcription, segments pass through three hallucination filters (see §4), then optionally:
 
 - **OpenCC s2tw** — Simplified → Traditional Chinese (Taiwan standard), applied when `language=zh` and the user enables the option.
 - **Subtitle merging** — `merge_segments()` in `srt_utils.py` merges consecutive segments subject to:
   - Gaps ≤ 50 ms are **always** merged (avoids split artifacts from Whisper cutting mid-word).
   - For larger gaps: combined text ≤ `max_chars` (default 80) **and** combined duration ≤ 5 s.
-- **LLM translation** — For Hakka models, segments are batched through an Ollama LLM (see §6).
+- **LLM translation** — For Hakka models, segments are batched through an Ollama LLM (see §7).
 
 ---
 
-## 3. Hallucination Filtering
+## 4. Hallucination Filtering
 
 Whisper, particularly when fine-tuned on domain-specific data, tends to generate spurious output during silence or low-energy audio. Three independent filters are applied in sequence after `transcribe()`:
 
-### 3.1 `filter_repetition_loops`
+### 4.1 `filter_repetition_loops`
 
 Targets consecutive segments whose **normalised text** (punctuation and whitespace stripped) is identical.
 
@@ -140,13 +158,13 @@ Rule:
 
 Example suppressed: `好 / 好 / 好 / 好` (stuck token in silence).
 
-### 3.2 `filter_short_token_bursts`
+### 4.2 `filter_short_token_bursts`
 
 Targets consecutive runs of ≥ 2 segments whose normalised text is ≤ 2 characters, regardless of whether they are identical. This catches "counting" hallucinations distinct from repetition loops.
 
 Example suppressed: `一。/ 二。/ 三。` (different short tokens, equally meaningless).
 
-### 3.3 `filter_hallucinations`
+### 4.3 `filter_hallucinations`
 
 Uses `no_speech_prob` (from CTranslate2) and a regex pattern list to flag likely hallucinations. Critically, **only trailing flagged segments are removed** — flags in the middle of real content are ignored. This prevents accidental deletion of legitimate content that happens to match a pattern.
 
@@ -163,15 +181,15 @@ Uses `no_speech_prob` (from CTranslate2) and a regex pattern list to flag likely
 
 ---
 
-## 4. Multi-GPU Scheduling — TranscriberPool
+## 5. Multi-GPU Scheduling — TranscriberPool
 
 `TranscriberPool` (in `app.py`) manages concurrent access to multiple GPU-resident `WhisperTranscriber` instances.
 
-### 4.1 The Concurrency Problem
+### 5.1 The Concurrency Problem
 
 CTranslate2's `WhisperModel.generate()` is **not thread-safe**. Calling it concurrently from two threads on the same model instance corrupts internal CUDA state, producing `RuntimeError: CUDA failed with error invalid argument`. A naive "least-loaded" counter is insufficient because multiple threads can select the same GPU before any of them begins execution.
 
-### 4.2 Solution: Per-GPU Binary Semaphore
+### 5.2 Solution: Per-GPU Binary Semaphore
 
 Each GPU slot holds a `threading.Semaphore(1)`. The pool enforces **at-most-one concurrent inference per GPU**. The semaphore is acquired **outside** `self.lock` to prevent deadlocks:
 
@@ -191,7 +209,7 @@ Phase 4  (release_single_gpu_transcriber):
 
 With N GPUs, up to N requests run truly in parallel. Additional requests queue on the semaphore of their assigned GPU.
 
-### 4.3 GPU Selection — Four-Priority Strategy
+### 5.3 GPU Selection — Four-Priority Strategy
 
 The pool does not simply prefer the least-loaded GPU, because that ignores model cache state and semaphore availability:
 
@@ -204,7 +222,7 @@ The pool does not simply prefer the least-loaded GPU, because that ignores model
 
 Priority 1 uses a non-blocking `sem.acquire(blocking=False)` probe inside the lock. The semaphore is immediately released; the real acquisition happens in Phase 2 after the lock is released.
 
-### 4.4 GPU Detection
+### 5.4 GPU Detection
 
 ```python
 # SINGLE_GPU_DEVICES overrides CUDA_VISIBLE_DEVICES
@@ -216,9 +234,9 @@ With `CUDA_VISIBLE_DEVICES=0,1`, the pool creates slots `{0, 1}` and correspondi
 
 ---
 
-## 5. Model Management
+## 6. Model Management
 
-### 5.1 Model Format
+### 6.1 Model Format
 
 `faster-whisper` requires models in **CTranslate2 format**. Three model categories are handled:
 
@@ -228,7 +246,7 @@ With `CUDA_VISIBLE_DEVICES=0,1`, the pool creates slots `{0, 1}` and correspondi
 | Private HF models (HF Transformers format) | Hakka v2/v3 | Auto-converted at first use via `ct2-transformers-converter` |
 | Private HF models (already CT2) | Taigi | Downloaded directly; config patched for correct mel bins |
 
-### 5.2 The n_mels Problem
+### 6.2 The n_mels Problem
 
 Whisper-v2 models use **80 mel bins**; Whisper-v3 models use **128**. Fine-tuned models hosted on HuggingFace sometimes ship with `config.json` or `preprocessor_config.json` that specifies the wrong value, causing a silent feature extraction mismatch.
 
@@ -241,19 +259,17 @@ elif actual_n_mels is not None:
     raise RuntimeError(...)  # fail fast with actionable message
 ```
 
-### 5.3 Model ID Confidentiality
+### 6.3 Model ID Confidentiality
 
 Private HuggingFace repo IDs are never hardcoded. They are injected via environment variables (`HAKKA_V2_MODEL`, `HAKKA_V3_MODEL`, `TAIGI_MODEL`) and read at import time in `transcriber.py`. `MODEL_CONFIGS` is constructed dynamically — a language option only appears in the UI if the corresponding variable is set.
 
-The UI-level model lists (`GENERAL_MODELS_IDS`, `HAKKA_MODELS_IDS`, `TAIGI_MODELS_IDS`) are derived from `MODEL_CONFIGS` at module load time, making them the single source of truth across the entire codebase.
-
 ---
 
-## 6. Hakka Translation Pipeline
+## 7. Hakka Translation Pipeline
 
-When a Hakka model is selected and `ENABLE_LLM=true`, ASR output is post-translated to Traditional Mandarin via a locally-deployed Ollama LLM.
+When a Hakka model is selected and `ENABLE_LLM=true`, ASR output is post-translated to Traditional Mandarin via a locally-deployed [Ollama](https://ollama.com/) LLM.
 
-### 6.1 Batch Translation
+### 7.1 Batch Translation
 
 Segments are processed in batches of `OLLAMA_BATCH_SIZE` (default 5) lines per API call:
 
@@ -264,7 +280,15 @@ Slow path:  if reply line count mismatches → translate each line individually
 
 The slow path is automatic, transparent, and ensures the output segment list is always the same length as the input.
 
-### 6.2 Lexicon Augmentation
+### 7.2 Thinking Mode Control
+
+Gemma 4 models support a built-in reasoning (thinking) mode. For translation tasks, thinking is explicitly disabled to avoid polluting the output:
+
+- **API level**: `"think": false` is passed as a top-level parameter in every Ollama `/api/chat` request.
+- **Post-processing**: `_strip_thinking()` strips any residual `<|channel>thought\n...<channel|>` blocks that 26B/31B models may still emit even when thinking is disabled.
+- **System prompt**: Does not include the `<|think|>` control token, which would re-enable thinking.
+
+### 7.3 Lexicon Augmentation
 
 `lexicon/hakka_to_mandarin.csv` contains a Hakka–Mandarin term mapping. When `use_lexicon=True`, matched terms from the current batch are injected into the system prompt as translation hints using a **longest-match-first** strategy:
 
@@ -275,13 +299,13 @@ The slow path is automatic, transparent, and ensures the output segment list is 
 
 Iterating buckets from longest to shortest ensures multi-character compounds take priority over their substrings. Up to `LEXICON_MAX_HINTS` (default 20) hints are injected per batch.
 
-### 6.3 LLM Configuration
+### 7.4 LLM Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENABLE_LLM` | `false` | Master switch |
 | `OLLAMA_HOST` | `http://ollama:11434` | Service endpoint |
-| `OLLAMA_MODEL` | `qwen2.5:7b` | Model tag |
+| `OLLAMA_MODEL` | `gemma4:31b` | Ollama model tag |
 | `OLLAMA_BATCH_SIZE` | `5` | Lines per API call |
 | `OLLAMA_TIMEOUT` | `300` | Per-call timeout (seconds) |
 
@@ -293,9 +317,18 @@ docker compose --profile llm up -d
 
 In the reference hardware setup, GPU 2–3 are assigned exclusively to Ollama, leaving GPU 0–1 for Whisper ASR.
 
+### 7.5 Recommended Ollama Models
+
+| Model tag | Size | Architecture | Notes |
+|-----------|------|--------------|-------|
+| `gemma4:31b` | 20 GB | Dense 31B | Best quality; fits 2× RTX 2080 Ti (22 GB) |
+| `gemma4:26b` | 18 GB | MoE 26B / 4B active | Faster inference, slightly lower quality |
+
+> Gemma 4 requires Ollama v0.20.0 or newer. Run `docker pull ollama/ollama:latest` to ensure you have a compatible version before the first start.
+
 ---
 
-## 7. Supported Models
+## 8. Supported Models
 
 | Model ID | Language | Task | n_mels | VRAM | Notes |
 |----------|----------|------|--------|------|-------|
@@ -309,7 +342,7 @@ In the reference hardware setup, GPU 2–3 are assigned exclusively to Ollama, l
 
 ---
 
-## 8. Environment Variables
+## 9. Environment Variables
 
 All configuration is managed through `.env`. Copy `.env.example` and fill in values. The `.env` file is listed in `.gitignore` and must never be committed.
 
@@ -335,7 +368,7 @@ All configuration is managed through `.env`. Copy `.env.example` and fill in val
 |----------|---------|-------------|
 | `ENABLE_LLM` | `false` | Enable Ollama LLM translation |
 | `OLLAMA_HOST` | `http://ollama:11434` | Ollama API endpoint |
-| `OLLAMA_MODEL` | `qwen2.5:7b` | Model tag |
+| `OLLAMA_MODEL` | `gemma4:31b` | Ollama model tag |
 | `OLLAMA_BATCH_SIZE` | `5` | Segments per LLM call |
 | `OLLAMA_TIMEOUT` | `300` | Per-call timeout (s) |
 | `HAKKA_LEXICON_PATH` | `lexicon/hakka_to_mandarin.csv` | Hakka–Mandarin term dictionary |
@@ -366,7 +399,7 @@ The legacy `GRADIO_PASSWORD` env var is still supported as a fallback (maps to a
 
 ---
 
-## 9. Deployment
+## 10. Deployment
 
 ### Prerequisites
 
@@ -397,6 +430,16 @@ docker compose logs -f
 
 Access the web UI at `http://<host>:7860`.
 
+### First-time Ollama Setup
+
+When `ENABLE_LLM=true`, the whisper-asr container automatically calls `ollama pull` at startup if the model is not yet downloaded. For `gemma4:31b` (~20 GB), this may take several minutes. Monitor progress with:
+
+```bash
+docker compose logs -f ollama
+```
+
+> **Important:** Gemma 4 requires Ollama v0.20.0+. If you see a `412: requires a newer version of Ollama` error, run `docker pull ollama/ollama:latest` and restart.
+
 ### Model Conversion on First Run
 
 When a Hakka model (HF Transformers format) is used for the first time, `ensure_model_ready()` automatically runs `ct2-transformers-converter`:
@@ -417,7 +460,7 @@ Converted models are cached at `$HF_HOME/ct2_converted/` inside the `whisper-mod
 | `torch-hub` | `/root/.cache/torch/hub` | Silero VAD model |
 | `ollama-models` | `/root/.ollama` | Ollama LLM weights |
 
-DeepFilterNet3 weights are baked into the image and do not require a volume.
+DeepFilterNet3 and DPDFNet weights are baked into the image and do not require a volume.
 
 ### GPU Allocation Example (4-GPU Server)
 
@@ -448,7 +491,7 @@ Model volumes are preserved across rebuilds.
 
 ---
 
-## 10. API Reference
+## 11. API Reference
 
 The Gradio interface exposes a REST API compatible with `gradio_client`.
 
@@ -460,8 +503,7 @@ from gradio_client import Client
 client = Client("http://<host>:7860", auth=("username", "password"))
 
 status, asr_srt, asr_file, _, translated_srt, translated_file = client.predict(
-    audio_file="/path/to/audio.wav",   # local file path OR None
-    youtube_url="",                     # YouTube URL OR empty string
+    audio_file="/path/to/audio.wav",   # local file path
     model_size="large-v3-turbo",        # model ID from MODEL_CONFIGS
     language="auto",                    # auto | zh | en | hakka | taigi
     task="transcribe",                  # transcribe | translate
@@ -504,24 +546,24 @@ status, asr_srt, asr_file, _, translated_srt, translated_file = client.predict(
 
 ---
 
-## 11. Project Structure
+## 12. Project Structure
 
 ```
 whisper-for-subs/
 │
-├── app.py                  # Entry point: Gradio UI, FastAPI routes, TranscriberPool
+├── app.py                  # Entry point: Gradio UI, TranscriberPool, ASR & Enhance-Only pipelines
 ├── transcriber.py          # WhisperTranscriber, model management, hallucination filters
 ├── vad.py                  # SileroVAD wrapper
-├── speech_enhancer.py      # DeepFilterNet3 integration
-├── hakka_translator.py     # Ollama LLM client, lexicon augmentation
+├── speech_enhancer.py      # DeepFilterNet3 + DPDFNet integration
+├── hakka_translator.py     # Ollama LLM client, thinking-mode control, lexicon augmentation
 ├── srt_utils.py            # SRT generation, parsing, subtitle merging
 ├── chinese_converter.py    # OpenCC s2tw wrapper
-├── youtube_downloader.py   # yt-dlp wrapper
 ├── preload_deepfilter.py   # Docker build-time DeepFilterNet3 pre-download
+├── preload_dpdfnet.py      # Docker build-time DPDFNet pre-download
 ├── manage_users.py         # CLI helper for .users credential management
 │
 ├── requirements.txt
-├── Dockerfile              # CUDA 12.4 + Python 3.11; bakes in VAD and DF3 models
+├── Dockerfile              # CUDA 12.4 + Python 3.11; bakes in VAD and enhancement models
 ├── docker-compose.yml      # ASR service + optional Ollama LLM profile
 ├── .env.example
 │
@@ -538,7 +580,7 @@ whisper-for-subs/
 
 ---
 
-## 12. Hardware Requirements
+## 13. Hardware Requirements
 
 ### Minimum (single GPU)
 
@@ -552,11 +594,11 @@ whisper-for-subs/
 | Resource | Allocation |
 |----------|------------|
 | GPU 0–1 | Whisper ASR (`CUDA_VISIBLE_DEVICES=0,1`) |
-| GPU 2–3 | Ollama LLM (`--profile llm`, `device_ids: ['2','3']`) |
+| GPU 2–3 | Ollama LLM (`--profile llm`, `device_ids: ['2','3']`, `gemma4:31b` ≈20 GB) |
 | RAM | 32 GB |
 | Disk | 200 GB (multiple model weights) |
 
-### Throughput (RTX 2080 Ti × 4, large-v3-turbo, float16)
+### Throughput (RTX 2080 Ti × 2, large-v3-turbo, float16)
 
 | Audio Length | 1 GPU | 2 GPUs | Speedup |
 |-------------|-------|--------|---------|
@@ -568,16 +610,17 @@ whisper-for-subs/
 
 ---
 
-## 13. Acknowledgements
+## 14. Acknowledgements
 
 - [OpenAI Whisper](https://github.com/openai/whisper) — base ASR architecture
 - [faster-whisper](https://github.com/guillaumekln/faster-whisper) — CTranslate2 inference engine
 - [Silero VAD](https://github.com/snakers4/silero-vad) — voice activity detection
-- [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) — neural noise suppression
+- [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) — neural noise suppression (DeepFilterNet3)
+- [DPDFNet](https://huggingface.co/qualcomm/DPDFNet) — causal TFLite-based speech enhancement
 - [Gradio](https://gradio.app/) — web UI and API framework
 - [Ollama](https://ollama.com/) — local LLM inference
+- [Gemma 4](https://ai.google.dev/gemma) — Google DeepMind open model for Hakka translation
 - [OpenCC](https://github.com/BYVoid/OpenCC) — Simplified/Traditional Chinese conversion
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — YouTube audio extraction
 
 ### Developers
 
